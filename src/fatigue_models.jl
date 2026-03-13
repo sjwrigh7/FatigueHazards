@@ -1,0 +1,44 @@
+struct BilinearMaterial
+    s_max::Float64
+    s_min::Float64
+    n_max::Float64
+    n_min::Float64
+    slope::Float64
+end
+
+function BilinearMaterial(s_max::Real,s_min::Real,n_max::Real,n_min::Real)
+    delta_s = log(10,s_max) - log(10,s_min)
+    delta_n = log(10,n_min) - log(10,n_max)
+
+    slope = delta_n / delta_s
+
+    return BilinearMaterial(
+        log(s_max),
+        log(s_min),
+        log(n_max),
+        log(n_min),
+        Float64(slope)
+    )
+end
+
+function bilinear_sn(material::BilinearMaterial,s::Float64)
+    if s < material.s_max
+        log_ds = log(10,s) - material.s_min
+
+        log_n = material.n_max + slope * log_ds
+        return 10 ^ log_n
+    else
+        return 10 ^ material.n_min
+    end
+end
+
+function palmgren_miner(material::BilinearMaterial,stresses::Vector{Float64},cycles::Vector{Float64},error_sample=0.0)
+    damage = 0.0
+    for (s,n) in zip(stresses,cycles)
+        sn = bilinear_sn(material,s)
+        sn = sn * 10 ^ error_sample
+        ratio = n / sn
+        damage += ratio
+    end
+    return damage        
+end
