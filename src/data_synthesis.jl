@@ -166,3 +166,28 @@ function partition_time(data::StepStressRawData)
     )
     return clean_data
 end
+
+function merge_grids(prev_time,prev_stress,new_time,fail_idx)
+    new_stresses = Vector{Float64}(undef,length(fail_idx))
+    for i in eachindex(new_stresses)
+        new_stresses[i] = prev_stresses[
+            fail_idx[i] + 1
+        ]
+    end
+    
+    merged_time = vcat(
+        prev_time,new_time
+    )
+
+    merged_stress = vcat(
+        prev_stress,
+        new_stress
+    )
+
+    sort_idx = sortperm(merged_time)
+
+    sort_time = merged_time[sort_idx]
+    sort_stress = merged_stress[sort_idx]
+
+    sort_time,sort_stress
+end
