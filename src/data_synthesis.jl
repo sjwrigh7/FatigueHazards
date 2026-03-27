@@ -4,12 +4,14 @@ struct StepStressTest
     n::Float64
 end
 
-function single_step_stress(material::BilinearMaterial,test::StepStressTest,error_model<:UnivariateDistribution)
+function single_step_stress(material::BilinearMaterial,test::StepStressTest,error_model::UnivariateDistribution)
     # initialize to not have failed
     has_failed = false
     # incrementor for number of stress steps
     ita = 0
 
+    stresses = []
+    cycles = []
     cumulative_damage = Float64[]
 
     push!(cumulative_damage,0.0)
@@ -38,7 +40,7 @@ function single_step_stress(material::BilinearMaterial,test::StepStressTest,erro
     sn = bilinear_sn(material,stresses[end]) * 10 ^ error_sample
 
     cycles[end] = remaining_damage * sn
-
+    println(cycles)
     return stresses,cycles
 end
 
@@ -57,7 +59,7 @@ function sweep_design(s0::Vector{Float64},ds::Vector{Float64},n::Vector{Float64}
     ita = 0
     for k in n
         for j in ds
-            for i in n_s0
+            for i in s0
                 for l in 1:n_rep
                     ita += 1
                     design[ita] = StepStressTest(
@@ -88,11 +90,11 @@ struct StepStressData
     s_max::Float64
     t_max::Float64
     s_norm::Array{Float64,2}
-    t_norm::Array{Float64,2}
-    delta_i::Array{Float64,2}
+    t_norm::Array{Float64}
+    delta_i::Array{Int,2}
 end
 
-function simulate_step_stress(material::BilinearMaterial,test::Vector{StepStressTest},error_model<:UnivariateDistribution)
+function simulate_step_stress(material::BilinearMaterial,test::Vector{StepStressTest},error_model::UnivariateDistribution)
     stresses = Vector{Float64}[]
     cycles = Vector{Float64}[]
 
@@ -124,7 +126,7 @@ function partition_time(data::StepStressRawData)
     )
 
     delta_i = Array{Int}(undef,length(time_set),length(data.cycles))
-    delta_i[1,:] .- 0
+    delta_i[1,:] .= 0
     delta_i[end,:] .= 0
 
     stresses = Array{Float64}(undef,size(delta_i))
@@ -136,13 +138,13 @@ function partition_time(data::StepStressRawData)
             if data.cycles[j][1] > time_set[i]
                 cycle_idx = 1
             elseif sum(data.cycles[j]) < time_set[i]
-                cycle_idx = length(cycles[j])
+                cycle_idx = length(data.cycles[j])
             else
-                cycle_idx = findlast(x -> c <= time_set[i],cumsum(data.cycles[j]))
+                cycle_idx = findlast(x -> x <= time_set[i],cumsum(data.cycles[j]))
             end
             stresses[i,j] = data.stresses[j][cycle_idx]
 
-            if isapprox(sum(cycles[j]), time_set[i])
+            if isapprox(sum(data.cycles[j]), time_set[i])
                 delta_i[i,j] = 1
             else
                 delta_i[i,j] = 0
@@ -156,6 +158,8 @@ function partition_time(data::StepStressRawData)
     s_norm = stresses ./ s_max
     t_norm = time_set ./ t_max
 
+    println(typeof(delta_i))
+
     clean_data = StepStressData(
         data,
         s_max,
@@ -164,24 +168,26 @@ function partition_time(data::StepStressRawData)
         t_norm,
         delta_i
     )
+    println(typeof(clean_data.delta_i))
     return clean_data
 end
 
 function merge_grids(prev_time,prev_stress,new_time,fail_idx)
-    new_stresses = Vector{Float64}(undef,length(fail_idx))
-    for i in eachindex(new_stresses)
-        new_stresses[i] = prev_stresses[
+    new_stress = Vector{Float64}(undef,length(fail_idx))
+    for i in eachindex(new_stress)
+        new_stress[i] = prev_stress[
             fail_idx[i] + 1
         ]
     end
     
     merged_time = vcat(
-        prev_time,new_time
+        new_time,
+        prev_time
     )
 
     merged_stress = vcat(
-        prev_stress,
-        new_stress
+        new_stress,
+        prev_stress
     )
 
     sort_idx = sortperm(merged_time)
@@ -189,5 +195,8 @@ function merge_grids(prev_time,prev_stress,new_time,fail_idx)
     sort_time = merged_time[sort_idx]
     sort_stress = merged_stress[sort_idx]
 
-    sort_time,sort_stress
+    merged_idx = findall(x -> in(x,1:length(new_time)),sort_idx)
+    new_idx = sort_idx[merged_idx]
+
+    sort_time,sort_stress,merged_idx,new_idx
 end
