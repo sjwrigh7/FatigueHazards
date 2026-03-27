@@ -29,6 +29,17 @@ function sum_risk(j::Int,x::Array{Float64,2},beta::Float64,delta_i::Array{Int,2}
     return sum_risk
 end
 
+function sum_risk(j::Int,x::Array{Float64,2},beta::ForwardDiff.Dual,delta_i::Array{Int,2})
+    idx = in_risk(j,delta_i)
+
+    sum_risk = 0.0
+    for i in idx
+        s = x[j,i]
+        sum_risk += exp(s * beta)
+    end
+    return sum_risk
+end
+
 """
     in_risk(j,delta_i)
 Evaluates the set of specimens that have not yet failed at index j of the time vector
@@ -71,9 +82,43 @@ end
 Evaluates the cumulative hazard function over a time grid with precomputed sum of I spline basis functions
 and a precomputed risk
 """
-function cumulative_hazard(risk::Vector{Float64},I_diff::Array{Float64,2})
+function cumulative_hazard(risk::Vector{Float64},I_diff::Vector{Float64})
 
     c_hazard = cumsum(I_diff .* risk)
+
+    return c_hazard
+end
+
+"""
+Evaluates the cumulative hazard function over a time grid with precomputed sum of I spline basis functions
+and a precomputed risk
+"""
+function cumulative_hazard_scalar(risk::Vector{Float64},I_diff::Vector{Float64})
+
+    c_hazard = sum(I_diff .* risk)
+
+    return c_hazard
+end
+
+"""
+Evaluates the cumulative hazard function over a time grid with precomputed sum of I spline basis functions
+and a precomputed risk
+"""
+function cumulative_hazard_scalar(risk::SubArray{Float64},I_diff::SubArray{Float64})
+
+    c_hazard = sum(I_diff .* risk)
+
+    return c_hazard
+end
+
+"""
+Evaluates the cumulative hazard function over a time grid with precomputed sum of I spline basis functions
+and a precomputed risk
+"""
+function cumulative_hazard_scalar(mul_blank::SubArray{Float64},risk::SubArray{Float64},I_diff::SubArray{Float64})
+
+    mul_blank .= risk .* I_diff
+    c_hazard = sum(mul_blank)
 
     return c_hazard
 end
@@ -174,7 +219,10 @@ risk function
 function log_hazard(risk::Float64,M::Float64)
 
     hazard = log(
-        M * risk
+        min(
+            M * risk,
+            prevfloat(floatmax(Float64))
+        )
     )
 
     return hazard
@@ -204,11 +252,11 @@ function log_density(t::Float64,x::Vector{Float64},time_grid::Vector{Float64},
     # since I_diff is the differences between index i and i-1 over length of time_grid
     # and has length n-1, index j-1 of I_diff corresponds to index j in time
     cumulative = cumulative_hazard(
-        x[1:target_idx],
+        x[2:target_idx],
         beta,
         gamma,
         I_diff[1:(target_idx - 1),:]
-    )
+    )[end]
 
     # instantaneous hazard function at time t
     instant = log_hazard(
@@ -254,9 +302,62 @@ function log_density(t::Float64,x::Vector{Float64},time_grid::Vector{Float64},
 end
 
 """
+Evaluates the log density of the hazard model via precomputed sums of M and I_diff bases
+and a precomputed linear risk function
+"""
+function log_density(t::Float64,time_grid::Vector{Float64},
+    risk::Vector{Float64},I_diff::Vector{Float64},M::Vector{Float64},target_idx::Int)
+
+    # cumulative hazard function up to time t
+    # since I_diff is the differences between index i and i-1 over length of time_grid
+    # and has length n-1, index j-1 of I_diff corresponds to index j in time
+    cumulative = cumulative_hazard_scalar(
+        view(risk,2:target_idx),
+        view(I_diff,1:(target_idx - 1))
+    )
+
+    # instantaneous hazard function at time t
+    instant = log_hazard(
+        risk[target_idx],
+        M[target_idx]
+    )
+
+    density = -cumulative + instant
+    #println(cumulative)
+    return density
+end
+
+"""
+Evaluates the log density of the hazard model via precomputed sums of M and I_diff bases
+and a precomputed linear risk function
+"""
+function log_density!(mul_blank::Vector{Float64},time_grid::Vector{Float64},
+    risk::Vector{Float64},I_diff::Vector{Float64},M::Vector{Float64},target_idx::Int)
+
+    # cumulative hazard function up to time t
+    # since I_diff is the differences between index i and i-1 over length of time_grid
+    # and has length n-1, index j-1 of I_diff corresponds to index j in time
+    cumulative = cumulative_hazard_scalar(
+        view(mul_blank,1:(target_idx - 1)),
+        view(risk,2:target_idx),
+        view(I_diff,1:(target_idx - 1))
+    )
+
+    # instantaneous hazard function at time t
+    instant = log_hazard(
+        risk[target_idx],
+        M[target_idx]
+    )
+
+    density = -cumulative + instant
+    #println(cumulative)
+    return density
+end
+
+"""
 design initialization function for sampling failure time
 """
-function init_design(design::StepStressTest,spline_design::Spline_Design)
+function init_design(design::StepStressTest,spline_design::SplineDesign)
     # init time grid from 0 to maximum failure time in original data
     t_grid = collect(range(
         start = 0.0,
@@ -272,6 +373,12 @@ function init_design(design::StepStressTest,spline_design::Spline_Design)
             length = length(t_grid)-1
         ))
     )
+
+    if design.ds < 0.0
+        target_idx = findlast(x -> x > 0.0,stress_grid)
+        target_stress = stress_grid[target_idx]
+        stress_grid[target_idx:end] .= target_stress
+    end
 
     splines = generate_splines(
         spline_design.k,
@@ -299,8 +406,10 @@ function find_k(gamma,I_diff,risk_terms)
     k = findfirst(x -> x > log_u, survival_vals)
 
     # safety check to make sure 
-    if isnothin(k)
+    if isnothing(k)
         k = 1
+        prev_surv = 0.0
+    elseif k == 1
         prev_surv = 0.0
     else
         prev_surv = survival_vals[k-1]
@@ -317,7 +426,7 @@ function bisect_recurse(target,t1,t2,S1,S2,spline_params,gamma,tol)
     t_center = 0.5 * (t1 + t2)
     I_center = vec(eval_i_spline(
         spline_params.design.k,
-        spline_params.design.num_basis,
+        spline_params.num_basis,
         spline_params.knot_grid,
         [t_center]
     ))
