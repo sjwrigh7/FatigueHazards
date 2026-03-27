@@ -11,8 +11,8 @@ function metropolis_gamma(gamma,M,I_diff,stresses,J,risk_terms,fail_indic,step,j
     #current_lik = log_lik_splines(stresses,delta_i,T,beta,current_gamma,M,I)
     #proposed_lik = log_lik_splines(stresses,delta_i,T,beta,proposed_gamma,M,I)
 
-    current_lik = log_lik_splines(stresses,current_gamma,M,I_diff,J,risk_terms,fail_indic)
-    proposed_lik = log_lik_splines(stresses,proposed_gamma,M,I_diff,J,risk_terms,fail_indic)
+    current_lik = log_lik(stresses,current_gamma,M,I_diff,J,risk_terms,fail_indic)
+    proposed_lik = log_lik(stresses,proposed_gamma,M,I_diff,J,risk_terms,fail_indic)
 
     log_jump_current = logpdf(
         Normal(
@@ -53,21 +53,21 @@ function metropolis_gamma(gamma,M,I_diff,stresses,J,risk_terms,fail_indic,step,j
 end
 
 # more efficient metropolis function
-function metropolis_beta(beta,M,I_diff,stresses,fail_indic,J,gamma,step)
+function metropolis_beta(beta,M,I_diff,stresses,fail_indic,delta_i,J,gamma,step)
     current_beta = beta
     current_transformed = log(beta)
     proposed_transformed = rand(Normal(current_transformed,step))
     proposed_beta = exp(proposed_transformed)
 
     #proposed_beta = current_beta + rand(Normal(0.0,step))
-    current_risk = [calc_Aj(j,stresses,current_beta,delta_i) for j in 2:(J-1)]
-    proposed_risk = [calc_Aj(j,stresses,proposed_beta,delta_i) for j in 2:(J-1)]
+    current_risk = [sum_risk(j,stresses,current_beta,delta_i) for j in 2:(J-1)]
+    proposed_risk = [sum_risk(j,stresses,proposed_beta,delta_i) for j in 2:(J-1)]
 
     #current_lik = log_lik_splines(stresses,delta_i,T,current_beta,gamma,M,I)
     #proposed_lik = log_lik_splines(stresses,delta_i,T,proposed_beta,gamma,M,I)
 
-    current_lik = log_lik_splines(stresses,gamma,M,I_diff,J,current_risk,fail_indic)
-    proposed_lik = log_lik_splines(stresses,gamma,M,I_diff,J,proposed_risk,fail_indic)
+    current_lik = log_lik(stresses,gamma,M,I_diff,J,current_risk,fail_indic)
+    proposed_lik = log_lik(stresses,gamma,M,I_diff,J,proposed_risk,fail_indic)
     log_jump_current = logpdf(
         Normal(
             current_transformed,
