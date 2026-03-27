@@ -30,12 +30,12 @@ function opt_lik(data::StepStressData,splines::Splines)
 
         fail_indic = sum(data.delta_i[2:(end-1),:],dims=2)
 
-        risk_terms = [calc_Aj(j,data.snorm,beta,data.delta_i) for j in 2:(J-1)]
-        log_lik = log_lik_splines(data.s_norm,gamma,splines.M,splines.I_diff,J,risk_terms,fail_indic)
+        risk_terms = [sum_risk(j,data.s_norm,beta,data.delta_i) for j in 2:(J-1)]
+        lik = log_lik(data.s_norm,gamma,splines.M,splines.I_diff,J,risk_terms,fail_indic)
         #log_lik = log_lik_splines(stresses,delta_i,Ts,beta,gamma,M_star,I_star)
-        return -log_lik
+        return -lik
     end
-    x0 = [0.0 for i in 1:(splines.num_basis + 1)]
+    x0 = [0.0 for i in 1:(splines.params.num_basis + 1)]
 
     opt_res = optimize(
         f,
@@ -49,5 +49,6 @@ function opt_lik(data::StepStressData,splines::Splines)
     )
 
     opt_vals = exp.(opt_res.minimizer)
+    return opt_vals
 end
 
