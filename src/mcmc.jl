@@ -1,12 +1,12 @@
 function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
-    fail_indic = sum(delta_i[2:(end-1),:],dims=2)
+    fail_indic = sum(data.delta_i[2:(end-1),:],dims=2)
 
-    J = length(T)
+    J = length(data.t_norm)
 
     beta = init_vals[1]
     gamma = init_vals[2:end]
 
-    risk_terms = [calc_Aj(j,data.s_norm,beta,data.delta_i) for j in 2:(J-1)]
+    risk_terms = [sum_risk(j,data.s_norm,beta,data.delta_i) for j in 2:(J-1)]
 
     gamma_draws = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
     beta_draws = Vector{Float64}(undef,n_mcmc)
@@ -20,7 +20,7 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
     gamma_draws[1,:] .= gamma
 
     @showprogress "MCMC Iterating..." for i in 2:n_mcmc
-        for j in 1:n
+        for j in 1:splines.params.num_basis
             gamma_sample,accept = metropolis_gamma(
                 gamma,
                 splines.M,
@@ -43,6 +43,7 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
             splines.I_diff,
             data.s_norm,
             fail_indic,
+            data.delta_i,
             J,
             gamma,
             steps[end]
@@ -53,5 +54,5 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
         beta_accept[i] = accept
     end
     
-    return gamma_draws,beta_draws,gamma_accept,beta_accept,M_star,I_star,knot_grid
+    return gamma_draws,beta_draws,gamma_accept,beta_accept
 end
