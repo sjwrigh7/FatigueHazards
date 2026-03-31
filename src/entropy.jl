@@ -1,171 +1,33 @@
-function eval_entropy(design::StepStressTest,data::StepStressData,n_sim::Int,n_thin::Int,
-    n_rep::Int,n_burn::Int,beta_samples::Vector{Float64},gamma_samples::Array{Float64,2},
-    spline_design::SplineDesign)
+function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
+    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;results=:scalar)
 
-    beta_burn = beta_samples[(n_burn + 1):end]
-    gamma_burn = gamma_samples[(n_burn + 1):end,:]
-
-    beta_thin = beta_burn[1:n_thin:end]
-    gamma_thin = gamma_burn[1:n_thin:end,:]
-
-    design_norm = StepStressTest(
-        design.s0 / data.s_max,
-        design.ds / data.s_max,
-        design.n / data.t_max
+    log_joint,log_marg = _eval_entropy(
+        design,
+        data,
+        posterior_iid,
+        spline_design,
+        n_sim_outer,
+        n_sim_inner
     )
 
-    splines,stress_grid,t_grid = init_design(design_norm,spline_design)
-    #println(size(splines.I))
-
-    r_idx = rand(1:length(beta_burn),n_sim)
-    r_idx = repeat(r_idx,inner=n_rep)
-
-    r_beta = beta_burn[r_idx]
-    r_gamma = gamma_burn[r_idx,:]
-
-    t_samples = Vector{Float64}(undef,n_sim*n_rep)
-    ks = Vector{Int}(undef,n_sim*n_rep)
-
-    log_dens = 0.0
-    log_marg = 0.0
-
-    ita = 0
-    @showprogress "Sampling failure time..." for i in 1:n_sim
-        for j in 1:n_rep
-            ita += 1
-            # pre calculate risk terms over time grid
-            risk_terms = exp.(stress_grid[2:end] .* r_beta[i])
-            #println(r_gamma[i,:])
-            t,k = sample_t(
-                r_gamma[i,:],
-                splines,
-                risk_terms,
-                t_grid,
-                1e-6
-            )
-            t_samples[ita] = t
-            ks[ita] = k
+    if results == :full
+        return log_joint,log_marg
+    else
+        non_log_marg = exp.(log_marg)
+        log_marg_vec = log.(mean(non_log_marg,dims=1))
+        if results == :vectors
+            return log_joint,log_marg_vec
+        else
+            ent = mean(log_dens) - mean(log_marg_vec)
+            return ent
         end
     end
-
-    combined_time,combined_stress,fail_idx = merge_grids(t_grid,stress_grid,t_samples,ks)
-
-    param_idx = Int.(ceil.(fail_idx ./ n_rep))
-
-    println("Failure idx = ")
-    println(fail_idx[1:10])
-
-    println("Param idx = ")
-    println(param_idx[1:10])
-
-    update_x!(splines,combined_time)
-    ####################
-    # try precomputing all vals
-    risk_random = [exp.(combined_stress * r_beta[i]) for i in eachindex(r_beta)]
-    I_diff_random = [splines.I_diff * r_gamma[i,:] for i in axes(r_gamma,1)]
-    M_random = [splines.M * r_gamma[i,:] for i in axes(r_gamma,1)]
-
-    risk_post = [exp.(combined_stress * beta_thin[j]) for j in eachindex(beta_thin)]
-    I_diff_post = [splines.I_diff * gamma_thin[j,:] for j in axes(gamma_thin,1)]
-    M_post  = [splines.M * gamma_thin[j,:] for j in axes(gamma_thin,1)]
-    ####################
-
-    log_dens = Vector{Float64}(undef,n_sim*n_rep)
-    log_marg = Array{Float64}(undef,length(beta_thin),n_sim*n_rep)
-    mul_blank = Vector{Float64}(undef,maximum(fail_idx))
-
-    #println("risk_random = ",size(risk_random))
-    #println("t samples = ",size(t_samples))
-    #println("random draws = ",length(r_idx))
-    #println("fail idx = ",length(fail_idx))
-
-    ita = 0
-    @showprogress "Computing entropy..." for i in 1:n_sim
-        for k in 1:n_rep
-            ita += 1
-            log_dens[ita] = log_density!(
-                mul_blank,
-                combined_time,
-                risk_random[param_idx[ita]],
-                I_diff_random[param_idx[ita]],
-                M_random[param_idx[ita]],
-                fail_idx[ita]
-            )
-            #log_marg_inner = 0.0
-            for j in eachindex(beta_thin)
-                log_marg[j,ita] = log_density!(
-                    mul_blank,
-                    combined_time,
-                    risk_post[j],
-                    I_diff_post[j],
-                    M_post[j],
-                    fail_idx[ita]
-                )
-            end
-        end
-    end
-    #=
-    for i in 1:n_sim
-        log_dens += log_density(
-            t_samples[i],
-            combined_stress,
-            combined_time,
-            r_beta[i],
-            r_gamma[i,:],
-            splines.I_diff,
-            splines.M
-        )
-
-        for j in eachindex(beta_thin)
-            log_marg += log_density(
-                t_samples[i],
-                combined_stress,
-                combined_time,
-                beta_thin[j],
-                gamma_thin[j,:],
-                splines.I_diff,
-                splines.M
-            )
-        end
-    end
-    =#
-
-    #entropy = sum(log_marg) / (n_sim * length(beta_thin)) - sum(log_dens) / n_sim
-
-    #objective = entropy / mean(t_samples)
-    #println(log_marg)
-    #entropy = log_marg / n_sim - log_dens / n_sim
-    time_norm = (maximum(t_samples) - minimum(t_samples)) / length(t_samples)
-    marg = exp.(log_marg)
-    dens = exp.(log_dens)
-
-    marg_norm = vec(mean(marg,dims=1)) / (sum(mean(marg,dims=1)) * time_norm)
-    dens_norm = dens / (sum(dens) * time_norm)
-
-    log_marg_norm = log.(marg_norm)
-    log_dens_norm = log.(dens_norm)
-
-    ent = mean(log_dens_norm) - mean(log_marg_norm)
-    return log_dens_norm,log_marg_norm,combined_time,t_samples
 end
 
-function eval_entropy(design::StepStressTest,data::StepStressData,n_sim::Int,lag::Int,
-    n_burn::Int,beta_samples::Vector{Float64},gamma_samples::Array{Float64,2},
-    spline_design::SplineDesign;n_thin=1)
+function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
+    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner)
 
-    beta_burn = beta_samples[(n_burn + 1):end]
-    gamma_burn = gamma_samples[(n_burn + 1):end,:]
-
-    #n_samp = length(beta_samples) - n_burn + 1
-
-    #beta_burn = rand(Uniform(1e-4,20),n_samp)
-    #gamma_burn = rand(Uniform(1e-4,20),n_samp,size(gamma_samples,2))
-
-    beta_lag = beta_burn[1:lag:end]
-    gamma_lag = gamma_burn[1:lag:end,:]
-    
-    beta_thin = beta_lag[1:n_thin:end]
-    gamma_thin = gamma_burn[1:n_thin:end,:]
+    sample_avail = length(posterior_iid.beta)
 
     design_norm = StepStressTest(
         design.s0 / data.s_max,
@@ -174,26 +36,49 @@ function eval_entropy(design::StepStressTest,data::StepStressData,n_sim::Int,lag
     )
 
     splines,stress_grid,t_grid = init_design(design_norm,spline_design)
-    #println(size(splines.I))
 
-    n_sim = min(n_sim,length(beta_lag))
-    r_idx = rand(1:length(beta_lag),n_sim)
+    if n_sim_outer > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_outer...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_outer = min(n_sim_outer,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_outer")
+    end
+    if n_sim_inner > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_inner...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_inner = min(n_sim_inner,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_inner")
+    end
+    
+    outer_idx = sample(1:sample_avail,n_sim_outer,replace=false)
 
-    r_beta = beta_lag[r_idx]
-    r_gamma = gamma_lag[r_idx,:]
+    beta_outer = posterior_iid.beta[outer_idx]
+    gamma_outer = posterior_iid.gamma[outer_idx,:]
 
-    t_samples = Vector{Float64}(undef,n_sim)
-    ks = Vector{Int}(undef,n_sim)
+    thin_val = Int(floor(sample_avail / n_sim_inner))
+    inner_idx = (
+        collect(
+            range(
+                start = 1,
+                step = thin_val,
+                length = n_sim_inner
+            )
+        )
+    )
 
-    log_dens = 0.0
-    log_marg = 0.0
 
-    @showprogress "Sampling failure time..." for i in 1:n_sim
+    beta_inner = posterior_iid.beta[inner_idx]
+    gamma_inner = posterior_iid.gamma[inner_idx,:]
+
+    t_samples = Vector{Float64}(undef,n_sim_outer)
+    ks = Vector{Int}(undef,n_sim_outer)
+
+    @showprogress "Sampling failure time..." for i in 1:n_sim_outer
         # pre calculate risk terms over time grid
-        risk_terms = exp.(stress_grid[2:end] .* r_beta[i])
+        risk_terms = exp.(stress_grid[2:end] .* beta_outer[i])
         #println(r_gamma[i,:])
         t,k = sample_t(
-            r_gamma[i,:],
+            gamma_outer[i,:],
             splines,
             risk_terms,
             t_grid,
@@ -205,24 +90,30 @@ function eval_entropy(design::StepStressTest,data::StepStressData,n_sim::Int,lag
 
 
 
-    combined_time,combined_stress,merged_idx,new_idx = merge_grids(t_grid,stress_grid,t_samples,ks)
+    combined_time,combined_stress,time_grid_idx,param_idx = merge_grids(
+        t_grid,
+        stress_grid,
+        t_samples,
+        ks
+    )
 
     update_x!(splines,combined_time)
     ####################
     # try precomputing all vals
-    risk_random = [exp.(combined_stress * r_beta[i]) for i in eachindex(r_beta)]
-    I_diff_random = [splines.I_diff * r_gamma[i,:] for i in axes(r_gamma,1)]
-    M_random = [splines.M * r_gamma[i,:] for i in axes(r_gamma,1)]
+    risk_outer = [exp.(combined_stress * beta_outer[i]) for i in eachindex(beta_outer)]
+    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
 
-    risk_post = [exp.(combined_stress * beta_thin[j]) for j in eachindex(beta_thin)]
-    I_diff_post = [splines.I_diff * gamma_thin[j,:] for j in axes(gamma_thin,1)]
-    M_post  = [splines.M * gamma_thin[j,:] for j in axes(gamma_thin,1)]
+    risk_inner = [exp.(combined_stress * beta_inner[j]) for j in eachindex(beta_inner)]
+    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
     ####################
 
-    log_dens = Vector{Float64}(undef,n_sim)
-    log_marg = Array{Float64}(undef,length(beta_thin),n_sim)
-    mul_blank = Vector{Float64}(undef,maximum(merged_idx))
+    log_joint = Vector{Float64}(undef,n_sim_outer)
+    log_marg = Array{Float64}(undef,n_sim_inner,n_sim_outer)
+    mul_blank = Vector{Float64}(undef,maximum(time_grid_idx))
 
+    #=
     println("risk_random = ",size(risk_random))
     println("combined time = ",size(combined_time))
     println("random draws = ",length(r_idx))
@@ -232,59 +123,88 @@ function eval_entropy(design::StepStressTest,data::StepStressData,n_sim::Int,lag
     println(maximum(merged_idx))
     println("n sim = ",n_sim)
     println("I diff rand = ",size(I_diff_random))
+    =#
 
-    @showprogress "Computing entropy..." for i in 1:n_sim
-        log_dens[i] = log_density!(
+    @showprogress "Computing entropy..." for i in 1:n_sim_outer
+        log_joint[i] = log_density!(
             mul_blank,
             combined_time,
-            risk_random[new_idx[i]],
-            I_diff_random[new_idx[i]],
-            M_random[new_idx[i]],
-            merged_idx[i]
+            risk_outer[param_idx[i]],
+            I_diff_outer[param_idx[i]],
+            M_outer[param_idx[i]],
+            time_grid_idx[i]
         )
         #log_marg_inner = 0.0
-        for j in eachindex(beta_thin)
+        for j in 1:n_sim_inner
             log_marg[j,i] = log_density!(
                 mul_blank,
                 combined_time,
-                risk_post[j],
-                I_diff_post[j],
-                M_post[j],
-                merged_idx[i]
+                risk_inner[j],
+                I_diff_inner[j],
+                M_inner[j],
+                time_grid_idx[i]
             )
         end
     end
 
-    #entropy = sum(log_marg) / (n_sim * length(beta_thin)) - sum(log_dens) / n_sim
-
-    #objective = entropy / mean(t_samples)
-    #println(log_marg)
-    #entropy = log_marg / n_sim - log_dens / n_sim
-    #time_norm = (maximum(t_samples) - minimum(t_samples)) / length(t_samples)
-    #marg = exp.(log_marg)
-    #dens = exp.(log_dens)
-
-    #marg_norm = vec(mean(marg,dims=1)) / (sum(mean(marg,dims=1)) * time_norm)
-    #dens_norm = dens / (sum(dens) * time_norm)
-
-    #log_marg_norm = log.(marg_norm)
-    #log_dens_norm = log.(dens_norm)
-
-    #ent = mean(log_dens_norm) - mean(log_marg_norm)
-    return log_dens,log_marg,combined_time,t_samples
+    return log_joint,log_marg
 end
 
-function get_fact(n,n_theta)
-    fact_vals = Array{Int}(undef,n,n_theta)
-    for theta in 1:n_theta
-        fact_vals[:,theta].= collect(1:n)
+function eval_inner_chain(log_marg_chain;band=0)
+    n_inner = size(log_marg_chain,1)
+    r_idx = sample(1:n_inner,n_inner,replace=false)
+
+    marg = exp.(log_marg_chain[r_idx,:])
+
+    running_means = cumsum(marg,dims=1) ./ (1:n_inner)
+
+    if band == 0
+        band = max(50,Int(floor(0.05 * n_inner)))
     end
 
-    grid = Array{Float64}(undef,n^n_theta,n_theta)
+    println(band)
+    band_vars = Array{Float64}(undef,(n_inner - 2 * band),size(running_means,2))
 
-    for j in axes(doe,2)
-        grid[:,j] = repeat(fact_fals[:,j],inner=n^(j-1),outer=n^(size(doe,2) - j))
+    for j in axes(band_vars,2)
+        for i in axes(band_vars,1)
+            temp = running_means[i:(i + 2 * band - 1),j]
+            band_vars[i,j] = std(temp)
+        end
     end
 
-    return grid
+    _,best_idx = findmin(band_vars[end,:])
+    _,worst_idx = findmax(band_vars[end,:])
+
+    p1 = plot(
+        1:size(running_means,1),
+        running_means[:,best_idx] .- running_means[end,best_idx],
+        label="MC Sample Mean"
+    )
+    plot!(
+        collect(1:size(band_vars,1)) .+ band,
+        band_vars[:,best_idx],
+        label = "MC Band Variance"
+    )
+    title!("Convergence of Best Chain")
+    xlabel!("MC Iteration")
+    ylabel!("Sample Value")
+
+    p2 = plot(
+        1:size(running_means,1),
+        running_means[:,worst_idx] .- running_means[end,worst_idx],
+        label="MC Sample Mean"
+    )
+    plot!(
+        collect(1:size(band_vars,1)) .+ (band),
+        band_vars[:,worst_idx],
+        label = "MC Band Variance"
+    )
+    title!("Convergence of Worst Chain")
+    xlabel!("MC Iteration")
+    ylabel!("Sample Value")
+
+    println(best_idx)
+    println(worst_idx)
+    #display(p1)
+    display(p1)
 end
