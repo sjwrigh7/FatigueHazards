@@ -195,8 +195,8 @@ function merge_grids(prev_time,prev_stress,new_time,fail_idx)
     sort_time = merged_time[sort_idx]
     sort_stress = merged_stress[sort_idx]
 
-    merged_idx = findall(x -> in(x,1:length(new_time)),sort_idx)
-    new_idx = sort_idx[merged_idx]
+    time_grid_idx = findall(x -> in(x,1:length(new_time)),sort_idx)
+    param_idx = sort_idx[time_grid_idx]
 
-    sort_time,sort_stress,merged_idx,new_idx
+    sort_time,sort_stress,time_grid_idx,param_idx
 end
