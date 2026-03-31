@@ -1,3 +1,7 @@
+cd(@__DIR__)
+using Pkg
+Pkg.activate(".")
+
 using Revise
 using Distributions
 using LatinHypercubeSampling
@@ -5,15 +9,16 @@ using GaussianProcesses
 using Optim
 using ADTypes
 using BlackBoxOptim
-using Pkg
+
 using FatigueHazards
-#Pkg.develop("FatigueHazards")
+#Pkg.develop(path="/home/stephenw/programming/FatigueHazards")
 using Test
 
 using Plots
 using StatsBase
 
-
+########################
+## define material model
 s_min = 1000.0
 s_max = 20_000.0
 n_min = 1e3
@@ -26,28 +31,40 @@ mat = FatigueHazards.BilinearMaterial(
     n_min
 )
 
+####################################
+#### generate synthetic data
+
 #s0 = [1000.0,3000.0,6000.0,10000.0]
 #ds = [1000.0,2000.0,4000.0,6000.0]
 #n0 = [1e3,1e5,1e7]
-s0 = [1000.0,6000.0]
-ds = [2000.0,6000.0]
-n0 = [1e4,1e6]
-n_rep = 3
+## test design
+s0 = [1000.0,6000.0] # starting stress
+ds = [2000.0,6000.0] # stress step
+n0 = [1e4,1e6] # number of cycles per stress level
+n_rep = 3 # number of i.i.d. samples per test design point
 
+# material strength error
 error_dist = Normal(0.0,10^(-1.5))
 
+# construct design
 initial_design = FatigueHazards.sweep_design(s0,ds,n0,n_rep)
-
+# generate data
 initial_data = FatigueHazards.simulate_step_stress(mat,initial_design,error_dist)
 
+######################################
+## generate splines
 begin
     spline_order = 4
     n_int = 3
     spl = FatigueHazards.init(initial_data,spline_order,n_int)
 end
 
+######################################
+##### set up for MCMC
+## find approximate MLE values for beta and gamma parameters
 opt_vals = FatigueHazards.opt_lik(initial_data,spl)
 
+## define step size for MCMC
 steps = [
     2.0, # I basis function coeffs
     3.2,
@@ -59,11 +76,98 @@ steps = [
     0.5 # beta
 ]
 
-samples = FatigueHazards.mcmc_baseline_splines(initial_data,spl,100_000,steps,opt_vals)
+##################################
+##### mcmc sampling of beta and gamma
+## initial mcmc samples of beta and gamma
+samples = FatigueHazards.mcmc_baseline_splines(initial_data,spl,10_000,steps,opt_vals)
 
-n_burn = 5000
-lag = FatigueHazards.find_lag(samples[1],samples[2],5_000)
-#lag = 1300
+## calculate necessary lag
+n_burn = 2000
+lag,acf_vals = FatigueHazards.find_lag(
+    samples.gamma,
+    samples.beta,
+    n_burn;
+    target=0.05,
+    grid_size=2000,
+    results=true
+)
+
+## optionally plot ACF results
+let 
+    p = plot()
+    plot!(log.(10,acf_vals.lags),acf_vals.beta,label="beta")
+    for i in axes(acf_vals.gamma,2)
+        plot!(log.(10,acf_vals.lags),acf_vals.gamma[:,i],label="gamma $i")
+    end
+    title!("Posterior Autocorrelation")
+    xlabel!("Log10 Lag")
+    ylabel!("Autocorrelation")
+    display(p)
+end
+
+##############################################
+## optional memory efficient aggregation of lagged samples
+n_target = 10_000
+max_size = 1_000_000
+
+bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
+    initial_data,
+    spl,
+    n_target,
+    steps,
+    opt_vals,
+    n_burn,
+    lag;
+    length_lim=max_size
+)
+
+
+design_norm = FatigueHazards.StepStressTest(
+    1e4 / initial_data.s_max,
+    3e3 / initial_data.s_max,
+    3e3 / initial_data.t_max
+)
+
+test1 = FatigueHazards.init_design(
+    design_norm,
+    spl.params.design
+)
+
+
+test_design = FatigueHazards.StepStressTest(
+    1e4, #/ initial_data.s_max,
+    3e3, #/ initial_data.s_max,
+    3e3 #/ initial_data.t_max
+)
+
+log_joint,log_marg = FatigueHazards.eval_entropy(
+    test_design,
+    initial_data,
+    bulk_samples,
+    spl.params.design,
+    9000,
+    4000;
+    results=:full
+)
+
+FatigueHazards.eval_inner_chain(log_marg;band=100)
+
+let 
+    r_idx = sample(1:length(log_joint),length(log_joint),replace=false)
+    joint = exp.(log_joint)
+    marg = vec(mean(exp.(log_marg),dims=1))
+    log_marg_vec = log.(marg)
+
+    log_joint_running = cumsum(log_joint[r_idx]) ./ (1:length(log_joint))
+    log_marg_running = cumsum(log_marg_vec[r_idx]) ./ (1:length(log_marg_vec))
+
+    p1 = plot()
+    plot!(log_joint_running,label="joint")
+    plot!(log_marg_running,label="marginal")
+
+
+end
+#=
 max_lag = 1000
 
 lag_vals = round.(Int,10 .^ collect(
@@ -88,53 +192,7 @@ let
     display(p)
     savefig(p,save_path*"autocorr.png")
 end
-
-
-# memory efficient aggregation of lagged samples
-n_target = 50_000
-sample_size = length((1:2_100_000)[(n_burn + 1):max_lag:end])
-n_rep = Int(ceil(n_target / sample_size))
-beta_samples = Vector{Float64}(undef,sample_size * n_rep)
-gamma_samples = Array{Float64}(undef,sample_size * n_rep,spl.params.num_basis)
-
-for i in 1:n_rep
-    start_idx = (i - 1) * sample_size + 1
-    stop_idx = i * sample_size
-
-    samps = FatigueHazards.mcmc_baseline_splines(
-        initial_data,
-        spl,
-        2_100_000,
-        steps,
-        opt_vals
-    )
-
-    beta_samples[start_idx:stop_idx] .= samps[2][(n_burn+1):max_lag:end]
-    gamma_samples[start_idx:stop_idx,:] .= samps[1][(n_burn+1):max_lag:end,:]
-end
-
-
-
-design_norm = FatigueHazards.StepStressTest(
-    1e4 / initial_data.s_max,
-    3e3 / initial_data.s_max,
-    3e3 / initial_data.t_max
-)
-
-test1 = FatigueHazards.init_design(
-    design_norm,
-    spl.params.design
-)
-
-
-test_design = FatigueHazards.StepStressTest(
-    1e4, #/ initial_data.s_max,
-    3e3, #/ initial_data.s_max,
-    3e3 #/ initial_data.t_max
-)
-
-
-
+=#
 gamma_use = vec(mean(gamma_samples,dims=1))
 beta_use = mean(beta_samples)
 
@@ -329,14 +387,16 @@ reg_marg = exp.(log_marg)
 
 let 
     p = plot()
-    idx = 10
-    marg_running = cumsum(reg_marg[:,idx]) ./ (1:size(reg_marg,1))
-    plot!(marg_running,label="Marginal")
+    idx = 8999
+    marg_running = (cumsum(reg_marg[:,idx]) ./ (1:size(log_marg,1)))
+    #test1 = cumsum(log_marg[:,idx]) ./ (1:size(log_marg,1))
+    plot!(marg_running[1000:end],label="Marginal")
+    #plot!(test1)
     title!("Inner Monte Carlo Expectation")
     xlabel!("Iteration")
     ylabel!("Sample Mean")
     display(p)
-    savefig(p,save_path*"marginal_inner_mc.png")
+    #savefig(p,save_path*"marginal_inner_mc.png")
 end
 
 marg_use = vec(log.(mean(reg_marg,dims=1)))
