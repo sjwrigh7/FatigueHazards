@@ -7,6 +7,7 @@ using ProgressMeter
 using Optim, ADTypes
 import ForwardDiff
 using StatsBase
+using Plots
 # Write your package code here.
 
 include("fatigue_models.jl")
