@@ -288,34 +288,3 @@ function get_fact(n,n_theta)
 
     return grid
 end
-
-function find_lag(gamma,beta,n_burn)
-    
-    n_tot = length(beta) - n_burn
-
-    max_lag = log(10,n_tot / 5)
-
-    lag_vals = round.(Int,10 .^ collect(
-        range(
-            start=0,
-            stop=max_lag,
-            length=1000
-        )
-    ))
-
-    beta_acf = autocor(beta,lag_vals,demean=true)
-    gamma_acf = autocor(gamma,lag_vals,demean=true)
-
-    beta_lag_idx = findfirst(x -> x < 0.05,beta_acf)
-    gamma_lag_idx = [findfirst(x -> x < 0.05,gamma_acf[:,i]) for i in axes(gamma_acf,2)]
-
-    beta_lag = lag_vals[beta_lag_idx]
-    gamma_lag = lag_vals[gamma_lag_idx]
-
-    lag_use = maximum(vcat(
-        beta_lag,
-        gamma_lag
-    ))
-
-    return lag_use
-end
