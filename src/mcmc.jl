@@ -221,3 +221,52 @@ function bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
 
     return results
 end
+
+function geweke_statistic(samples::Vector{Float64};burn = 0,norm=false)
+    n = length(samples)
+    if burn == 0
+        burn = round(Int,0.5 * n)
+    else
+        if (n - burn) < 70
+            @warn "less than 35 samples are avaiable for each subset of the
+            Monte Carlo samples, which may violate the normality assumption.
+            Consider specifying a reduced burn number of use more samples"
+        end
+    end
+    n_set = round(
+        Int,
+        floor(0.5 * (n - burn))
+    )
+    
+    set1_idx = (burn + 1):(burn + n_set)
+    set2_idx = (burn + n_set + 1):(burn + 2 * n_set)
+
+    set1_mean = mean(samples[set1_idx])
+    set2_mean = mean(samples[set2_idx])
+
+    set1_var = var(samples[set1_idx])
+    set2_var = var(samples[set2_idx])
+
+    if norm
+        z = (set1_mean - set2_mean) / 
+            sqrt(
+                set1_var + set2_var
+            )
+    else
+        z = (set1_mean - set2_mean) / 
+            sqrt(
+                set1_var / n_set + 
+                set2_var / n_set
+            )
+    end
+    
+    if z > 1.645 || z < -1.645
+        println("Z score lies outside of 95% CI, indicating a lack of convergence")
+        println("Z = $z")
+        return false
+    else
+        println("Z score lies within 95% CI, indicating convergence")
+        println("Z = $z")
+        return true
+    end
+end
