@@ -1,6 +1,6 @@
 cd(@__DIR__)
 using Pkg
-Pkg.activate(".")
+Pkg.activate("..")
 
 using Revise
 using Distributions
@@ -145,12 +145,158 @@ log_joint,log_marg = FatigueHazards.eval_entropy(
     initial_data,
     bulk_samples,
     spl.params.design,
-    9000,
-    4000;
-    results=:full
+    2500,
+    10000;
+    results=:vector
 )
 
+test1 = FatigueHazards.eval_entropy(
+    test_design,
+    initial_data,
+    bulk_samples,
+    spl.params.design,
+    2500,
+    10000;
+    results=:scalar
+)
+
+let 
+    r_idx = sample(1:length(log_joint),length(log_joint),replace=false)
+    p = plot()
+    plot!(
+        cumsum(log_joint[r_idx]) ./ (collect(1:length(log_joint))),
+        label="Log-Conditional"
+    )
+    plot!(
+        cumsum(log_marg[r_idx]) ./ (collect(1:length(log_marg))),
+        label="Log-Marginal"
+    )
+end
+
+#########################
+# bayesian optimization of test design
+s_min = 1e3
+s_max = 2e4
+
+n_min = 1e3
+n_max = 1e7
+n_const = 5e3
+
+ds_min = -1e4
+ds_max = 1e4
+
+doe_bounds = [
+    (s_min,s_max),
+    (ds_min,ds_max),
+    #(n_min,n_max)
+]
+
+doe = LHCoptim(30,2,100)
+doe = scaleLHC(doe[1],doe_bounds)
+
+ent_vals = Vector{Float64}(undef,size(doe,1))
+begin
+    for i in axes(doe,1)
+        temp_design = FatigueHazards.StepStressTest(
+            doe[i,1],
+            doe[i,2],
+            n_const#doe[i,3]
+        )
+
+
+        ent_vals[i] = FatigueHazards.eval_entropy(
+            temp_design,
+            initial_data,
+            bulk_samples,
+            spl.params.design,
+            2500,
+            10000;
+            results=:scalar
+        )
+    end
+
+    # initialize GP
+    mdl = ElasticGPE(
+        length(doe_bounds),
+        mean = MeanConst(0.0),
+        kernel = SEArd(repeat([-1.0],length(doe_bounds)),-1.0),
+        logNoise = log(1e-3),
+        capacity = 3000
+    )
+
+    # set priors for GP
+    set_priors!(mdl.mean,[Normal(0.0,2.0)])
+    set_priors!(mdl.logNoise,[Normal(log(1e-3),0.1)])
+    set_priors!(mdl.kernel,vcat(repeat([Normal(-1.0,2.0)],length(doe_bounds)),Normal(-1.0,2.0)))
+
+    append!(mdl,permutedims(doe),(ent_vals))
+
+    #optimize!(mdl)
+
+    chain = ess(mdl;nIter=30000)
+
+    function objective(theta)
+        mdl_out = predict_f(mdl,permutedims(theta'))
+        upper_CI = mdl_out[1][1] + 1.65 * mdl_out[2][1]
+        return -upper_CI
+    end
+
+    n_opt = 50
+    for i in 1:n_opt
+        #x0 = [
+        #    rand(Uniform(s_min,s_max)),
+        #    rand(Uniform(ds_min,ds_max)),
+        #    rand(Uniform(n_min,n_max))
+        #]
+        opt_res = bboptimize(
+                objective;
+                SearchRange = doe_bounds,
+                PopulationSize=5_000,
+                MaxTime = 1.5
+            )
+        opt_val = best_candidate(opt_res)
+
+        temp_design = FatigueHazards.StepStressTest(
+            opt_val[1],
+            opt_val[2],
+            n_const#opt_val[3],
+        )
+        mdl_eval = FatigueHazards.eval_entropy(
+            temp_design,
+            initial_data,
+            bulk_samples,
+            spl.params.design,
+            2500,
+            10000;
+            results=:scalar
+        )
+
+        append!(mdl,permutedims(opt_val'),[mdl_eval])
+        chain = ess(mdl;nIter=10000)
+    end
+end
+
+#=
+test1 = FatigueHazards._log_sum_exp(log_marg[:,1]) .- log.(collect(1:size(log_marg,1)))
+est2 = log.(cumsum(exp.(log_marg[:,1])) ./ (collect(1:size(log_marg,1))))
+
+test3 = log.(cumsum(exp.(log_marg[:,end])) ./ (collect(1:size(log_marg,1))))
+
+maximum(log_marg[:,8108])
+minimum(log_marg[:,8108])
+
+test1 = FatigueHazards.eval_log_marg(log_marg;res=:full)
+
+let 
+    idx = 2497
+    p = plot()
+    plot!(exp.(test1[3000:end,(idx)]))
+    #plot!(exp.(test3))
+end
+
 FatigueHazards.eval_inner_chain(log_marg;band=100)
+=#
+
 
 let 
     r_idx = sample(1:length(log_joint),length(log_joint),replace=false)
@@ -499,107 +645,6 @@ dens_norm = dens1 / (sum(dens1) * time_norm)
 log_dens_norm = log.(dens_norm)
 
 mean(log_marg_norm) - mean(log_dens_norm)
-
-s_min = 1e3
-s_max = 2e4
-
-n_min = 1e3
-n_max = 1e7
-n_const = 5e3
-
-ds_min = -1e4
-ds_max = 1e4
-
-doe_bounds = [
-    (s_min,s_max),
-    (ds_min,ds_max),
-    #(n_min,n_max)
-]
-
-doe = LHCoptim(20,2,100)
-doe = scaleLHC(doe[1],doe_bounds)
-
-ent_vals = Vector{Float64}(undef,size(doe,1))
-begin
-for i in axes(doe,1)
-    temp_design = FatigueHazards.StepStressTest(
-        doe[i,1],
-        doe[i,2],
-        n_const#doe[i,3]
-    )
-    ent_vals[i] = FatigueHazards.eval_entropy(
-        temp_design,
-        initial_data,
-        10000,
-        10,
-        3000,
-        samples[2],
-        samples[1],
-        spl.params.design
-    )
-end
-
-# initialize GP
-mdl = ElasticGPE(
-    length(doe_bounds),
-    mean = MeanConst(0.0),
-    kernel = SEArd(repeat([-1.0],length(doe_bounds)),-1.0),
-    logNoise = log(1e-3),
-    capacity = 3000
-)
-
-# set priors for GP
-set_priors!(mdl.mean,[Normal(0.0,2.0)])
-set_priors!(mdl.logNoise,[Normal(log(1e-3),0.1)])
-set_priors!(mdl.kernel,vcat(repeat([Normal(-1.0,2.0)],length(doe_bounds)),Normal(-1.0,2.0)))
-
-append!(mdl,permutedims(doe),(ent_vals))
-
-#optimize!(mdl)
-
-chain = ess(mdl;nIter=30000)
-
-function objective(theta)
-    mdl_out = predict_f(mdl,permutedims(theta'))
-    upper_CI = mdl_out[1][1] + 1.65 * mdl_out[2][1]
-    return -upper_CI
-end
-
-n_opt = 50
-for i in 1:n_opt
-    #x0 = [
-    #    rand(Uniform(s_min,s_max)),
-    #    rand(Uniform(ds_min,ds_max)),
-    #    rand(Uniform(n_min,n_max))
-    #]
-    opt_res = bboptimize(
-            objective;
-            SearchRange = doe_bounds,
-            PopulationSize=5_000,
-            MaxTime = 1.5
-        )
-    opt_val = best_candidate(opt_res)
-
-    temp_design = FatigueHazards.StepStressTest(
-        opt_val[1],
-        opt_val[2],
-        n_const#opt_val[3],
-    )
-    mdl_eval = FatigueHazards.eval_entropy(
-        temp_design,
-        initial_data,
-        10000,
-        10,
-        3000,
-        samples[2],
-        samples[1],
-        spl.params.design
-    )
-
-    append!(mdl,permutedims(opt_val'),[mdl_eval])
-    chain = ess(mdl;nIter=10000)
-end
-end
 #TODO: look into optimizing entropy calculations
 
 @testset "FatigueHazards.jl" begin

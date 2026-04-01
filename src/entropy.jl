@@ -1,7 +1,7 @@
 function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
     spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;results=:scalar)
 
-    log_joint,log_marg = _eval_entropy(
+    log_cond,log_marg = _eval_entropy(
         design,
         data,
         posterior_iid,
@@ -10,15 +10,16 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
         n_sim_inner
     )
 
+
+    log_marg = eval_log_marg(log_marg; res=:full)
+
     if results == :full
-        return log_joint,log_marg
+        return log_cond,log_marg
     else
-        non_log_marg = exp.(log_marg)
-        log_marg_vec = log.(mean(non_log_marg,dims=1))
-        if results == :vectors
-            return log_joint,log_marg_vec
-        else
-            ent = mean(log_dens) - mean(log_marg_vec)
+        if results == :vector
+            return log_cond, log_marg[end,:]
+        elseif results == :scalar
+            ent = mean(log_cond) - mean(log_marg[end,:])
             return ent
         end
     end
@@ -109,7 +110,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
     M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
     ####################
 
-    log_joint = Vector{Float64}(undef,n_sim_outer)
+    log_cond = Vector{Float64}(undef,n_sim_outer)
     log_marg = Array{Float64}(undef,n_sim_inner,n_sim_outer)
     mul_blank = Vector{Float64}(undef,maximum(time_grid_idx))
 
@@ -126,7 +127,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
     =#
 
     @showprogress "Computing entropy..." for i in 1:n_sim_outer
-        log_joint[i] = log_density!(
+        log_cond[i] = log_density!(
             mul_blank,
             combined_time,
             risk_outer[param_idx[i]],
@@ -147,7 +148,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         end
     end
 
-    return log_joint,log_marg
+    return log_cond,log_marg
 end
 
 function eval_inner_chain(log_marg_chain;band=0)
@@ -207,4 +208,49 @@ function eval_inner_chain(log_marg_chain;band=0)
     println(worst_idx)
     #display(p1)
     display(p1)
+end
+
+function eval_log_marg(log_marg::Array{Float64,2};res=:scalar)
+    results = _eval_log_marg(log_marg,res)
+
+    if res == :full
+        return results
+    elseif res == :scalar
+        return results[end,:]
+    end
+end
+
+function _eval_log_marg(log_marg::Array{Float64,2},res)
+    log_marg_expect = similar(log_marg)
+
+    @inbounds for i in axes(log_marg,2)
+        log_marg_expect[:,i] .= log_sum_exp(log_marg[:,i];res=res) .- log.(collect(1:size(log_marg,1)))
+    end
+
+    return log_marg_expect
+end
+
+function log_sum_exp(p::Vector{Float64};res=:scalar)
+    results = _log_sum_exp(p)
+
+    if res == :full
+        return results
+    elseif res == :scalar
+        return results[end]
+    end
+end
+
+function _log_sum_exp(p::Vector{Float64})
+    a = maximum(p)
+    if !isfinite(a)
+        return a
+    end
+
+    s = similar(p)
+
+    @inbounds for i in eachindex(p)
+        s[i] = exp(p[i] - a)
+    end
+
+    return a .+ log.(cumsum(s))
 end
