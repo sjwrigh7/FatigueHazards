@@ -107,7 +107,7 @@ end
 
 ##############################################
 ## optional memory efficient aggregation of lagged samples
-n_target = 10_000
+n_target = 3_000
 max_size = 1_000_000
 
 bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
@@ -140,13 +140,39 @@ test_design = FatigueHazards.StepStressTest(
     3e3 #/ initial_data.t_max
 )
 
-log_joint,log_marg = FatigueHazards.eval_entropy(
+log_cond,log_marg_full = FatigueHazards.eval_entropy(
     test_design,
     initial_data,
     bulk_samples,
     spl.params.design,
-    2500,
-    10000;
+    3000,
+    3000;
+    results=:full
+)
+
+let 
+    start = round(Int,0.5 * size(log_marg_full,1))
+    start = 1
+    idx = round.(
+        Int,
+        range(
+            start = 1,
+            stop = size(log_marg_full,2),
+            length = 12
+        )
+        )
+    p = plot()
+    plot!(log_marg_full[start:end,idx])
+    #plot!(exp.(test3))
+end
+
+log_cond,log_marg_vec = FatigueHazards.eval_entropy(
+    test_design,
+    initial_data,
+    bulk_samples,
+    spl.params.design,
+    3000,
+    3000;
     results=:vector
 )
 
@@ -155,20 +181,26 @@ test1 = FatigueHazards.eval_entropy(
     initial_data,
     bulk_samples,
     spl.params.design,
-    2500,
-    10000;
+    3000,
+    3000;
     results=:scalar
 )
+#FatigueHazards.geweke_statistic(log_marg_full[:,3000];burn=1200,norm=true)
 
 let 
-    r_idx = sample(1:length(log_joint),length(log_joint),replace=false)
+    r_idx = sample(
+        1:length(log_cond),
+        length(log_cond),
+        replace=false
+    )
+    FatigueHazards.geweke_statistic(log_marg_vec[r_idx];burn=2000)
     p = plot()
     plot!(
-        cumsum(log_joint[r_idx]) ./ (collect(1:length(log_joint))),
+        cumsum(log_cond[r_idx]) ./ (collect(1:length(log_cond))),
         label="Log-Conditional"
     )
     plot!(
-        cumsum(log_marg[r_idx]) ./ (collect(1:length(log_marg))),
+        cumsum(log_marg_vec[r_idx]) ./ (collect(1:length(log_marg_vec))),
         label="Log-Marginal"
     )
 end
@@ -214,34 +246,47 @@ begin
             results=:scalar
         )
     end
+end
 
-    # initialize GP
-    mdl = ElasticGPE(
-        length(doe_bounds),
-        mean = MeanConst(0.0),
-        kernel = SEArd(repeat([-1.0],length(doe_bounds)),-1.0),
-        logNoise = log(1e-3),
-        capacity = 3000
-    )
+# initialize GP
+mdl = ElasticGPE(
+    length(doe_bounds),
+    mean = MeanConst(0.0),
+    kernel = SEArd(repeat([-1.0],length(doe_bounds)),-1.0),
+    logNoise = log(1e-3),
+    capacity = 3000
+)
 
-    # set priors for GP
-    set_priors!(mdl.mean,[Normal(0.0,2.0)])
-    set_priors!(mdl.logNoise,[Normal(log(1e-3),0.1)])
-    set_priors!(mdl.kernel,vcat(repeat([Normal(-1.0,2.0)],length(doe_bounds)),Normal(-1.0,2.0)))
+# set priors for GP
+set_priors!(mdl.mean,[Normal(0.0,2.0)])
+set_priors!(mdl.logNoise,[Normal(log(1e-3),0.1)])
+set_priors!(mdl.kernel,vcat(repeat([Normal(1.0,10.0)],length(doe_bounds)),Normal(-1.0,2.0)))
 
-    append!(mdl,permutedims(doe),(ent_vals))
+append!(mdl,permutedims(doe),(ent_vals))
 
-    #optimize!(mdl)
 
-    chain = ess(mdl;nIter=30000)
+optimize!(mdl,noise=false)
 
-    function objective(theta)
-        mdl_out = predict_f(mdl,permutedims(theta'))
-        upper_CI = mdl_out[1][1] + 1.65 * mdl_out[2][1]
-        return -upper_CI
+chain = ess(mdl;nIter=30000,noise=false)
+
+if length(doe_bounds) == 2
+    let
+        p = plot()
+        plot(mdl,fill=true,label="GP",colorbartitle="Shannon Information")
+        scatter!(doe[:,1],doe[:,2],zcolor=ent_vals,label="Data")
+        xlabel!("Starting Stress")
+        ylabel!("Stress Step")
     end
+end
 
-    n_opt = 50
+function objective(theta)
+    mdl_out = predict_f(mdl,permutedims(theta'))
+    upper_CI = mdl_out[1][1] + 1.65 * mdl_out[2][1]
+    return -upper_CI
+end
+
+n_opt = 20
+begin
     for i in 1:n_opt
         #x0 = [
         #    rand(Uniform(s_min,s_max)),
@@ -266,13 +311,44 @@ begin
             initial_data,
             bulk_samples,
             spl.params.design,
-            2500,
-            10000;
+            3000,
+            3000;
             results=:scalar
         )
 
         append!(mdl,permutedims(opt_val'),[mdl_eval])
-        chain = ess(mdl;nIter=10000)
+        chain = ess(mdl;nIter=30000,noise=false)
+    end
+end
+
+curr_design = copy(mdl.x)
+curr_resp = copy(mdl.y)
+append!(mdl,curr_design,curr_resp)
+
+chain = ess(mdl;nIter=60000,noise=false)
+chain = GaussianProcesses.mcmc(mdl;nIter=30000,noise=false)
+GaussianProcesses.optimize!(mdl;noise=false)
+let
+    mu = vec(chain[1,:])
+    l1 = vec((chain[2,:]))
+    l2 = vec((chain[3,:]))
+    sig2 = vec((chain[4,:]))
+
+    p = plot()
+
+    plot!(mu,label="μ")
+    plot!(l1,label="ℓ1")
+    plot!(l2,label="ℓ2")
+    plot!(sig2,label="σ^2")
+end
+
+if length(doe_bounds) == 2
+    let
+        p = plot()
+        plot(mdl,fill=true,label="GP",colorbartitle="Shannon Information")
+        scatter!(doe[:,1],doe[:,2],zcolor=ent_vals,label="Data")
+        xlabel!("Starting Stress")
+        ylabel!("Stress Step")
     end
 end
 
