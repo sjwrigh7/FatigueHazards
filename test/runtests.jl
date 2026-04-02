@@ -6,8 +6,8 @@ using Revise
 using Distributions
 using LatinHypercubeSampling
 using GaussianProcesses
-using Optim
-using ADTypes
+#using Optim
+#using ADTypes
 using BlackBoxOptim
 
 using FatigueHazards
@@ -242,7 +242,7 @@ begin
             bulk_samples,
             spl.params.design,
             2500,
-            10000;
+            3000;
             results=:scalar
         )
     end
@@ -265,7 +265,7 @@ set_priors!(mdl.kernel,vcat(repeat([Normal(1.0,10.0)],length(doe_bounds)),Normal
 append!(mdl,permutedims(doe),(ent_vals))
 
 
-optimize!(mdl,noise=false)
+GaussianProcesses.optimize!(mdl,noise=false)
 
 chain = ess(mdl;nIter=30000,noise=false)
 
