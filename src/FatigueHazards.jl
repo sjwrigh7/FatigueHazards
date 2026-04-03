@@ -4,8 +4,10 @@ using Distributions
 using LinearAlgebra
 using LatinHypercubeSampling
 using ProgressMeter
-using Optim, ADTypes
-import ForwardDiff
+using GaussianProcesses
+using BlackBoxOptim
+#using Optim, ADTypes
+#import ForwardDiff
 using StatsBase
 using Plots
 # Write your package code here.
@@ -18,4 +20,5 @@ include("posterior_samplers.jl")
 include("mcmc.jl")
 include("entropy.jl")
 include("prelude.jl")
+include("optimization.jl")
 end
