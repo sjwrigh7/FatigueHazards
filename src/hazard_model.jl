@@ -364,6 +364,7 @@ function init_design(design::StepStressTest,spline_design::SplineDesign)
         step = design.n,
         stop = 1.0
     ))
+    #println(design.n)
     # init stress grid over length of time grid
     stress_grid = vcat(
         0.0,
@@ -376,6 +377,8 @@ function init_design(design::StepStressTest,spline_design::SplineDesign)
 
     if design.ds < 0.0
         target_idx = findlast(x -> x > 0.0,stress_grid)
+        #println(stress_grid[1:5])
+        #println(target_idx)
         target_stress = stress_grid[target_idx]
         stress_grid[target_idx:end] .= target_stress
     end
@@ -405,6 +408,8 @@ function find_k(gamma,I_diff,risk_terms)
     # find failure index, k
     k = findfirst(x -> x > log_u, survival_vals)
 
+    #println(k)
+    #println(isnothing(k))
     # safety check to make sure 
     if isnothing(k)
         k = 1
