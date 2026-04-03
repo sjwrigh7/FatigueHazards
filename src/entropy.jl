@@ -37,6 +37,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
     )
 
     splines,stress_grid,t_grid = init_design(design_norm,spline_design)
+    #println(t_grid)
 
     if n_sim_outer > sample_avail
         @warn "The number of desired outer Monte Carlo samples is $n_sim_outer...
