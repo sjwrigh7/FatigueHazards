@@ -22,7 +22,18 @@ function sum_risk(j::Int,x::Array{Float64,2},beta::Float64,delta_i::Array{Int,2}
     idx = in_risk(j,delta_i)
 
     sum_risk = 0.0
-    for i in idx
+    @inbounds for i in idx
+        s = x[j,i]
+        sum_risk += exp(s * beta)
+    end
+    return sum_risk
+end
+
+function sum_risk(j::Int,x::Array{Float64,2},beta::Float64,in_risk_idx::Vector{Vector{Int}})
+    idx = in_risk_idx[j]
+
+    sum_risk = 0.0
+    @inbounds for i in idx
         s = x[j,i]
         sum_risk += exp(s * beta)
     end
@@ -33,7 +44,18 @@ function sum_risk(j::Int,x::Array{Float64,2},beta::ForwardDiff.Dual,delta_i::Arr
     idx = in_risk(j,delta_i)
 
     sum_risk = 0.0
-    for i in idx
+    @inbounds for i in idx
+        s = x[j,i]
+        sum_risk += exp(s * beta)
+    end
+    return sum_risk
+end
+
+function sum_risk(j::Int,x::Array{Float64,2},beta::ForwardDiff.Dual,in_risk_idx::Vector{Vector{Int}})
+    idx = in_risk_idx[j]
+
+    sum_risk = 0.0
+    @inbounds for i in idx
         s = x[j,i]
         sum_risk += exp(s * beta)
     end
@@ -45,6 +67,7 @@ end
 Evaluates the set of specimens that have not yet failed at index j of the time vector
 """
 function in_risk(j,delta_i)
+    #idx = findall(x -> x == 0, vec(sum(delta_i[1:(j-1),:],dims=1)))
     idx = findall(x -> x == 0, vec(sum(delta_i[1:(j-1),:],dims=1)))
     return idx
 end
