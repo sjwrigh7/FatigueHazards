@@ -92,6 +92,7 @@ struct StepStressData
     s_norm::Array{Float64,2}
     t_norm::Array{Float64}
     delta_i::Array{Int,2}
+    in_risk_idx::Vector{Vector{Int}}
 end
 
 function simulate_step_stress(material::BilinearMaterial,test::Vector{StepStressTest},error_model::UnivariateDistribution)
@@ -160,13 +161,21 @@ function partition_time(data::StepStressRawData)
 
     println(typeof(delta_i))
 
+    in_risk_idx = Vector{Int}[]
+    push!(in_risk_idx,collect(axes(delta_i,2)))
+    for j in 2:(length(t_norm)-1)
+        idxs = findall(x -> x == 0, vec(sum(delta_i[1:(j-1),:],dims=1)))
+        push!(in_risk_idx,idxs)
+    end
+
     clean_data = StepStressData(
         data,
         s_max,
         t_max,
         s_norm,
         t_norm,
-        delta_i
+        delta_i,
+        in_risk_idx
     )
     println(typeof(clean_data.delta_i))
     return clean_data
