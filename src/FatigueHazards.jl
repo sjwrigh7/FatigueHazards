@@ -6,8 +6,8 @@ using LatinHypercubeSampling
 using ProgressMeter
 using GaussianProcesses
 using BlackBoxOptim
-#using Optim, ADTypes
-#import ForwardDiff
+import Optim, ADTypes
+import ForwardDiff
 using StatsBase
 using Plots
 # Write your package code here.
