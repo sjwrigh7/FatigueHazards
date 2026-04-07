@@ -1,14 +1,25 @@
 function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;results=:scalar)
+    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true)
 
-    log_cond,log_marg = _eval_entropy(
-        design,
-        data,
-        posterior_iid,
-        spline_design,
-        n_sim_outer,
-        n_sim_inner
-    )
+    if multithread
+        log_cond,log_marg = _par_eval_entropy(
+            design,
+            data,
+            posterior_iid,
+            spline_design,
+            n_sim_outer,
+            n_sim_inner
+        )
+    else
+        log_cond,log_marg = _eval_entropy(
+            design,
+            data,
+            posterior_iid,
+            spline_design,
+            n_sim_outer,
+            n_sim_inner
+        )
+    end
 
 
     log_marg = eval_log_marg(log_marg; res=:full)
@@ -75,7 +86,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
     t_samples = Vector{Float64}(undef,n_sim_outer)
     ks = Vector{Int}(undef,n_sim_outer)
 
-    @showprogress "Sampling failure time..." for i in 1:n_sim_outer
+    for i in 1:n_sim_outer
         # pre calculate risk terms over time grid
         risk_terms = exp.(stress_grid[2:end] .* beta_outer[i])
         #println(r_gamma[i,:])
@@ -127,7 +138,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
     println("I diff rand = ",size(I_diff_random))
     =#
 
-    @showprogress "Computing entropy..." for i in 1:n_sim_outer
+    for i in 1:n_sim_outer
         log_cond[i] = log_density!(
             mul_blank,
             combined_time,
@@ -140,6 +151,133 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         for j in 1:n_sim_inner
             log_marg[j,i] = log_density!(
                 mul_blank,
+                combined_time,
+                risk_inner[j],
+                I_diff_inner[j],
+                M_inner[j],
+                time_grid_idx[i]
+            )
+        end
+    end
+
+    return log_cond,log_marg
+end
+
+function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
+    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner)
+
+    sample_avail = length(posterior_iid.beta)
+
+    design_norm = StepStressTest(
+        design.s0 / data.s_max,
+        design.ds / data.s_max,
+        design.n / data.t_max
+    )
+
+    splines,stress_grid,t_grid = init_design(design_norm,spline_design)
+    #println(t_grid)
+
+    if n_sim_outer > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_outer...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_outer = min(n_sim_outer,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_outer")
+    end
+    if n_sim_inner > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_inner...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_inner = min(n_sim_inner,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_inner")
+    end
+    
+    outer_idx = sample(1:sample_avail,n_sim_outer,replace=false)
+
+    beta_outer = posterior_iid.beta[outer_idx]
+    gamma_outer = posterior_iid.gamma[outer_idx,:]
+
+    thin_val = Int(floor(sample_avail / n_sim_inner))
+    inner_idx = (
+        collect(
+            range(
+                start = 1,
+                step = thin_val,
+                length = n_sim_inner
+            )
+        )
+    )
+
+
+    beta_inner = posterior_iid.beta[inner_idx]
+    gamma_inner = posterior_iid.gamma[inner_idx,:]
+
+    t_samples = Vector{Float64}(undef,n_sim_outer)
+    ks = Vector{Int}(undef,n_sim_outer)
+
+    for i in 1:n_sim_outer
+        # pre calculate risk terms over time grid
+        risk_terms = exp.(stress_grid[2:end] .* beta_outer[i])
+        #println(r_gamma[i,:])
+        t,k = sample_t(
+            gamma_outer[i,:],
+            splines,
+            risk_terms,
+            t_grid,
+            1e-6
+        )
+        t_samples[i] = t
+        ks[i] = k
+    end
+
+
+
+    combined_time,combined_stress,time_grid_idx,param_idx = merge_grids(
+        t_grid,
+        stress_grid,
+        t_samples,
+        ks
+    )
+
+    update_x!(splines,combined_time)
+    ####################
+    # try precomputing all vals
+    risk_outer = [exp.(combined_stress * beta_outer[i]) for i in eachindex(beta_outer)]
+    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+
+    risk_inner = [exp.(combined_stress * beta_inner[j]) for j in eachindex(beta_inner)]
+    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    ####################
+
+    log_cond = Vector{Float64}(undef,n_sim_outer)
+    log_marg = Array{Float64}(undef,n_sim_inner,n_sim_outer)
+    mul_blank_iter = [Vector{Float64}(undef,maximum(time_grid_idx)) for _ in 1:Threads.nthreads()]
+
+    #=
+    println("risk_random = ",size(risk_random))
+    println("combined time = ",size(combined_time))
+    println("random draws = ",length(r_idx))
+    println("new idx = ",length(new_idx))
+    println(maximum(new_idx))
+    println("merged idx = ",length(merged_idx))
+    println(maximum(merged_idx))
+    println("n sim = ",n_sim)
+    println("I diff rand = ",size(I_diff_random))
+    =#
+
+    @inbounds Threads.@threads for i in 1:n_sim_outer
+        log_cond[i] = log_density!(
+            mul_blank_iter[1],
+            combined_time,
+            risk_outer[param_idx[i]],
+            I_diff_outer[param_idx[i]],
+            M_outer[param_idx[i]],
+            time_grid_idx[i]
+        )
+        #log_marg_inner = 0.0
+        @inbounds for j in 1:n_sim_inner
+            log_marg[j,i] = log_density!(
+                mul_blank_iter[Threads.threadid() - 1],
                 combined_time,
                 risk_inner[j],
                 I_diff_inner[j],
