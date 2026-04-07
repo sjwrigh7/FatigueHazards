@@ -16,6 +16,7 @@ using Test
 
 using Plots
 using StatsBase
+using Profile
 
 ########################
 ## define material model
@@ -79,8 +80,11 @@ steps = [
 ##################################
 ##### mcmc sampling of beta and gamma
 ## initial mcmc samples of beta and gamma
-samples = FatigueHazards.mcmc_baseline_splines(initial_data,spl,10_000,steps,opt_vals)
+@profview samples = FatigueHazards.mcmc_baseline_splines(initial_data,spl,40_000,steps,opt_vals)
 
+single_time = 1.053091
+single_n = 10_000
+yielded_iid = Int(floor(single_n / lag))
 ## calculate necessary lag
 n_burn = 2000
 lag,acf_vals = FatigueHazards.find_lag(
@@ -107,10 +111,11 @@ end
 
 ##############################################
 ## optional memory efficient aggregation of lagged samples
-n_target = 3_000
-max_size = 1_000_000
+n_target = 5000
+max_size = 50_000
+n_burn = 2000
 
-bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
+@time bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
     initial_data,
     spl,
     n_target,
@@ -118,9 +123,13 @@ bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
     opt_vals,
     n_burn,
     lag;
-    length_lim=max_size
+    length_lim=max_size,
+    multithread=true
 )
-
+n_rep = Int(floor((n_target / yielded_iid) * (single_n / max_size)))
+est_time = (n_rep * single_time / 12 + single_time) * (max_size / single_n)
+multi_time = 3.272694
+non_multi_time = 7.529408
 #################################
 ## eval optimal next test point
 next_test_point = FatigueHazards.optimize_design(
@@ -256,14 +265,25 @@ test_design = FatigueHazards.StepStressTest(
     3e3 #/ initial_data.t_max
 )
 
-log_cond,log_marg_full = FatigueHazards.eval_entropy(
+test2 = Vector{Float64}(undef,100)
+test_risk = [FatigueHazards.sum_risk(j,initial_data.s_norm,bulk_samples.beta[1],initial_data.in_risk_idx) for j in 2:(length(initial_data.t_norm)-1)]
+@profview for i in 1:10000
+    FatigueHazards.cumulative_hazard_scalar(
+        view(test2,1:10),
+        view(test_risk,2:11),
+        view(test1[1].I_diff,1:10)
+    )
+end
+
+@time log_cond,log_marg_full = FatigueHazards.eval_entropy(
     test_design,
     initial_data,
     bulk_samples,
     spl.params.design,
-    3000,
+    2500,
     3000;
-    results=:full
+    results=:full,
+    multithread=true
 )
 
 let 
@@ -278,7 +298,13 @@ let
         )
         )
     p = plot()
-    plot!(log_marg_full[start:end,idx])
+    plot!(
+        log_marg_full[start:end,idx],
+        label = false    
+    )
+    xlabel!("MC Iteration")
+    ylabel!("Log-Expectation of Marginal")
+    title!("Convergence of Inner MC")
     #plot!(exp.(test3))
 end
 
@@ -307,22 +333,27 @@ test1 = FatigueHazards.eval_entropy(
 )
 #FatigueHazards.geweke_statistic(log_marg_full[:,3000];burn=1200,norm=true)
 
+#TODO: check consistency of entropy calculations for previous methods
+#TODO... i.e., on master branch
 let 
     r_idx = sample(
-        1:length(log_cond),
-        length(log_cond),
+        1:length(mdl_eval[1]),
+        length(mdl_eval[1]),
         replace=false
     )
-    FatigueHazards.geweke_statistic(log_marg_vec[r_idx];burn=2000)
+    #FatigueHazards.geweke_statistic(log_marg_vec[r_idx];burn=2000)
     p = plot()
     plot!(
-        cumsum(log_cond[r_idx]) ./ (collect(1:length(log_cond))),
+        cumsum(mdl_eval[1][r_idx]) ./ (collect(1:length(mdl_eval[1]))),
         label="Log-Conditional"
     )
     plot!(
-        cumsum(log_marg_vec[r_idx]) ./ (collect(1:length(log_marg_vec))),
+        cumsum(mdl_eval[2][r_idx]) ./ (collect(1:length(mdl_eval[2]))),
         label="Log-Marginal"
     )
+    xlabel!("MC Iteration")
+    ylabel!("Expectation")
+    title!("Convergence of Outer MC")
 end
 
 #########################
@@ -335,7 +366,7 @@ n_max = 1e7
 n_const = 5e3
 
 ds_min = -1e4
-ds_max = 1e4
+ds_max = -1e1
 
 doe_bounds = [
     (s_min,s_max),
@@ -356,7 +387,7 @@ doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
 ent_vals = Vector{Float64}(undef,init_size)
 
 begin
-    for i in 1:init_size
+    @showprogress "Evaluating..." for i in 1:init_size
         temp_design = FatigueHazards.StepStressTest(
             doe[i,1],
             doe[i,2],
@@ -371,7 +402,8 @@ begin
             spl.params.design,
             2500,
             3000;
-            results=:scalar
+            results=:scalar,
+            multithread=true
         )
     end
 end
@@ -379,16 +411,16 @@ end
 # initialize GP
 mdl = ElasticGPE(
     length(doe_bounds),
-    mean = MeanConst(0.0),
-    kernel = SE(repeat([-1.0],length(doe_bounds)),-4.0),
+    mean = MeanConst(0.5),
+    kernel = SE(repeat([-1.50],length(doe_bounds)),-2.0),
     logNoise = noise_est,
     capacity = 3000
 )
 
 # set priors for GP
-set_priors!(mdl.mean,[Normal(0.0,2.0)])
+set_priors!(mdl.mean,[Normal(0.5,1.0)])
 set_priors!(mdl.logNoise,[Normal(noise_est,0.5)])
-set_priors!(mdl.kernel,vcat(repeat([Normal(-2.0,2.0)],length(doe_bounds)),Normal(-1.0,2.0)))
+set_priors!(mdl.kernel,vcat(repeat([Normal(-1.50,1.5)],length(doe_bounds)),Normal(-2.0,2.0)))
 
 append!(mdl,permutedims(doe_norm),(ent_vals))
 
@@ -399,7 +431,9 @@ catch
 end
 
 #chain = ess(mdl;nIter=30000,noise=false)
-
+let 
+    plot(chain')
+end
 if length(doe_bounds) == 2
     let
         p = plot()
@@ -445,11 +479,12 @@ begin
             spl.params.design,
             2500,
             3000;
-            results=:scalar
+            results=:scalar,
+            multithread=true
         )
 
         append!(mdl,permutedims(norm_vals'),[mdl_eval])
-        chain = ess(mdl;nIter=10000,noise=false)
+        chain = ess(mdl;nIter=30000,noise=true,domean=false)
         #GaussianProcesses.optimize!(mdl)
     end
 end
@@ -457,21 +492,21 @@ end
 # initialize GP
 mdl = ElasticGPE(
     length(doe_bounds),
-    mean = MeanConst(0.0),
-    kernel = SE(repeat([-1.0],length(doe_bounds)),-4.0),
-    logNoise = log(1e-3),
+    mean = MeanConst(0.5),
+    kernel = SE(repeat([-1.0],length(doe_bounds)),-2.0),
+    logNoise = noise_est,
     capacity = 3000
 )
 #append!(mdl,permutedims(doe_norm),ent_vals)
 # set priors for GP
-set_priors!(mdl.mean,[Normal(0.0,2.0)])
-set_priors!(mdl.logNoise,[Normal(log(1e-3),0.5)])
-set_priors!(mdl.kernel,vcat(repeat([Normal(-2.0,2.0)],length(doe_bounds)),Normal(-4.0,2.0)))
+set_priors!(mdl.mean,[Normal(0.5,1.0)])
+set_priors!(mdl.logNoise,[Normal(noise_est,0.5)])
+set_priors!(mdl.kernel,vcat(repeat([Normal(-1.0,1.0)],length(doe_bounds)),Normal(-2.0,1.0)))
 #set_priors!(mdl.kernel,vcat(repeat([Uniform(-2.0,2.0)],length(doe_bounds)),Uniform(-2.0,2.0)))
 
 append!(mdl,curr_design,curr_resp)
 
-GaussianProcesses.optimize!(mdl,noise=false,domean=false)
+GaussianProcesses.optimize!(mdl,noise=false)
 chain = ess(mdl;nIter=30000,noise=false)
 curr_design = copy(mdl.x)
 curr_resp = copy(mdl.y)
@@ -499,8 +534,8 @@ end
 if length(doe_bounds) == 2
     let
         p = plot()
-        plot(mdl,fill=true,label="GP",colorbartitle="Shannon Information")
-        scatter!(curr_design[1,:],curr_design[2,:],zcolor=curr_resp,label="Data")
+        #plot(mdl,fill=true,label="GP",colorbartitle="Shannon Information")
+        scatter!(mdl.x[1,:],mdl.x[2,:],zcolor=mdl.y,label="Data")
         xlabel!("Starting Stress")
         ylabel!("Stress Step")
     end
