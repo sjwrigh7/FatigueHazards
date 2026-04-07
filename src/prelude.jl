@@ -37,15 +37,15 @@ function opt_lik(data::StepStressData,splines::Splines)
     end
     x0 = [0.0 for i in 1:(splines.params.num_basis + 1)]
 
-    opt_res = optimize(
+    opt_res = Optim.optimize(
         f,
         x0,
-        LBFGS(),
+        Optim.LBFGS(),
         Optim.Options(
             store_trace=true,
             extended_trace=true,
         );
-        autodiff = AutoForwardDiff()
+        autodiff = ADTypes.AutoForwardDiff()
     )
 
     opt_vals = exp.(opt_res.minimizer)
