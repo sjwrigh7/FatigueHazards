@@ -25,13 +25,13 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
 
     gamma_accept = Array{Bool}(undef,size(gamma_draws))
     beta_accept = Array{Bool}(undef,length(beta_draws))
-    gamma_accept[1,:] .- true
+    gamma_accept[1,:] .= true
     beta_accept[1] = true
 
     beta_draws[1] = beta
     gamma_draws[1,:] .= gamma
 
-    @showprogress "MCMC Iterating..." for i in 2:n_mcmc
+    for i in 2:n_mcmc
         for j in 1:splines.params.num_basis
             gamma_sample,accept = metropolis_gamma(
                 gamma,
@@ -74,6 +74,68 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
     )
 
     return results
+end
+
+function mcmc_baseline_splines!(beta_draws::Vector{Float64},gamma_draws::Array{Float64,2},
+    main_risk::Vector{Float64},off_risk::Vector{Float64},
+    data,splines,n_mcmc,steps,init_vals)
+    fail_indic = sum(data.delta_i[2:(end-1),:],dims=2)
+
+    J = length(data.t_norm)
+
+    beta = init_vals[1]
+    gamma = init_vals[2:end]
+
+    @inbounds for j in eachindex(main_risk)
+        main_risk[j] = sum_risk(j+1,data.s_norm,beta,data.in_risk_idx)
+        off_risk[j] = sum_risk(j+1,data.s_norm,beta,data.in_risk_idx)
+    end
+
+    #gamma_draws = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
+    #beta_draws = Vector{Float64}(undef,n_mcmc)
+
+    #gamma_accept = Array{Bool}(undef,size(gamma_draws))
+    #beta_accept = Array{Bool}(undef,length(beta_draws))
+    #gamma_accept[1,:] .- true
+    #beta_accept[1] = true
+
+    beta_draws[1] = beta
+    gamma_draws[1,:] .= gamma
+
+    @inbounds for i in 2:n_mcmc
+        @inbounds for j in 1:splines.params.num_basis
+            gamma_sample,_ = metropolis_gamma(
+                gamma,
+                splines.M,
+                splines.I_diff,
+                data.s_norm,
+                J,
+                main_risk,
+                fail_indic,
+                steps[j],
+                j
+            )
+            gamma[j] = gamma_sample
+            gamma_draws[i,j] = gamma_sample
+        end
+
+        beta_sample,_ = metropolis_beta!(
+            main_risk,
+            off_risk,
+            beta,
+            splines.M,
+            splines.I_diff,
+            data.s_norm,
+            fail_indic,
+            data.in_risk_idx,
+            J,
+            gamma,
+            steps[end]
+        )
+
+        beta = beta_sample
+        beta_draws[i] = beta
+    end
 end
 
 struct VarsACF
@@ -133,7 +195,7 @@ function find_lag(gamma,beta,n_burn;target=0.05,grid_size=2000,results=false)
 end
 
 function bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
-    n_burn,lag;mem_lim = 0,ele_lim = 0,length_lim = 1_000_000)
+    n_burn,lag;mem_lim = 0,ele_lim = 0,length_lim = 1_000_000,multithread=true)
 
     println("Running batch MCMC to draw i.i.d. posteior samples...")
     println("The desired number of i.i.d. samples is ",n_mcmc)
@@ -165,6 +227,27 @@ function bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
         Defaulting to a maximum array length of 1000000"
         max_arr_len = 1_000_000
     end
+
+    
+    #if !((n_thread > 0) && (typeof(n_thread) == Int))
+    #    @warn "The specified number of threads is not a positive integer..."
+    #    println("defaulting to a single thread")
+    #    n_thread = 1
+    #end
+    if multithread
+        results = _par_bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
+    n_burn,lag,max_arr_len)
+    else
+        results = _bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
+    n_burn,lag,max_arr_len)
+    end
+
+    return results
+
+end
+
+function _bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
+    n_burn,lag,max_arr_len)
 
     full_beta = Vector{Float64}(undef,n_mcmc)
     full_gamma = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
@@ -208,6 +291,89 @@ function bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
     remain_thin_idx = base_range[1:remainder]
     beta_remain = remain_res.beta[remain_thin_idx]
     gamma_remain = remain_res.gamma[remain_thin_idx,:]
+    
+    remain_start_idx = n_rep * n_iid + 1
+
+    full_beta[remain_start_idx:end] .= beta_remain
+    full_gamma[remain_start_idx:end,:] .= gamma_remain
+
+    results = PosteriorIID(
+        full_beta,
+        full_gamma
+    )
+
+    return results
+end
+
+function _par_bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
+    n_burn,lag,max_arr_len)
+    full_beta = Vector{Float64}(undef,n_mcmc)
+    full_gamma = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
+    
+    beta_iter = [Vector{Float64}(undef,max_arr_len) for _ in 1:Threads.nthreads()]
+    gamma_iter = [Array{Float64}(undef,max_arr_len,splines.params.num_basis) for _ in 1:Threads.nthreads()]
+    main_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads()]
+    off_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads()]
+
+    n_avail = Int(floor((max_arr_len - n_burn) / lag))
+    println("With a burn value of $n_burn, and a lag of $lag, $n_avail i.i.d. samples can be drawn per batch")
+    if n_avail < n_mcmc
+        n_iid = n_avail
+        n_run = max_arr_len
+        n_rep = Int(floor(n_mcmc / n_iid))
+        println("A total of $(n_rep + 1) batches are necessary to achieve the target number of samples")
+    else
+        n_iid = n_mcmc
+        n_run = max_arr_len
+        n_rep = 0
+        println("A single batch is sufficient to achieve the target number of samples")
+    end
+
+    remainder = n_mcmc - (n_iid * n_rep)
+    remainder_sim = remainder * lag + n_burn
+
+    base_range = collect((n_burn + 1):lag:n_run)
+
+    Threads.@threads for i in 1:n_rep
+        println("Running batch #$i on thread $(Threads.threadid()) with an MCMC chain length of $n_run, yielding $n_iid i.i.d. samples")
+        start_idx = (i - 1) * n_iid + 1
+        stop_idx = i * n_iid
+        mcmc_baseline_splines!(
+            beta_iter[Threads.threadid()-1],
+            gamma_iter[Threads.threadid()-1],
+            main_risk_iter[Threads.threadid()-1],
+            off_risk_iter[Threads.threadid()-1],
+            data,
+            splines,
+            n_run,
+            steps,
+            init_vals
+        )
+
+        thin_idx = base_range[1:n_iid]
+        beta_thin = beta_iter[Threads.threadid()-1][thin_idx]
+        gamma_thin = gamma_iter[Threads.threadid()-1][thin_idx,:]
+        
+        full_beta[start_idx:stop_idx] .= beta_thin
+        full_gamma[start_idx:stop_idx,:] .= gamma_thin
+    end
+
+    println("Running batch #$(n_rep + 1) with an MCMC chain length of $remainder_sim, yielding $remainder i.i.d. samples")
+    mcmc_baseline_splines!(
+        beta_iter[1],
+        gamma_iter[1],
+        main_risk_iter[1],
+        off_risk_iter[1],
+        data,
+        splines,
+        remainder_sim,
+        steps,
+        init_vals
+    )
+
+    remain_thin_idx = base_range[1:remainder]
+    beta_remain = beta_iter[1][remain_thin_idx]
+    gamma_remain = gamma_iter[1][remain_thin_idx,:]
     
     remain_start_idx = n_rep * n_iid + 1
 
