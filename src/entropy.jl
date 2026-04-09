@@ -1,15 +1,22 @@
 function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true)
+    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true,
+    return_times=false)
 
     if multithread
-        log_cond,log_marg = _par_eval_entropy(
+        temp = _par_eval_entropy(
             design,
             data,
             posterior_iid,
             spline_design,
             n_sim_outer,
-            n_sim_inner
+            n_sim_inner;
+            return_times=return_times
         )
+        log_cond = temp[1]
+        log_marg = temp[2]
+        if return_times
+            t_samples = temp[3]
+        end
     else
         log_cond,log_marg = _eval_entropy(
             design,
@@ -25,13 +32,26 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
     log_marg = eval_log_marg(log_marg; res=:full)
 
     if results == :full
-        return log_cond,log_marg
+        if return_times
+            return log_cond,log_marg,t_samples
+        else
+            return log_cond,log_marg
+        end
     else
-        if results == :vector
-            return log_cond, log_marg[end,:]
-        elseif results == :scalar
-            ent = mean(log_cond) - mean(log_marg[end,:])
-            return ent
+        if return_times
+            if results == :vector
+                return log_cond, log_marg[end,:], t_samples
+            elseif results == :scalar
+                ent = mean(log_cond) - mean(log_marg[end,:])
+                return ent, t_samples
+            end
+        else
+            if results == :vector
+                return log_cond, log_marg[end,:]
+            elseif results == :scalar
+                ent = mean(log_cond) - mean(log_marg[end,:])
+                return ent
+            end
         end
     end
 end
@@ -164,7 +184,8 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
 end
 
 function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner)
+    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;
+    return_times=false)
 
     sample_avail = length(posterior_iid.beta)
 
@@ -228,8 +249,6 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         ks[i] = k
     end
 
-
-
     combined_time,combined_stress,time_grid_idx,param_idx = merge_grids(
         t_grid,
         stress_grid,
@@ -287,7 +306,11 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         end
     end
 
-    return log_cond,log_marg
+    if return_times
+        return log_cond,log_marg,combined_time[time_grid_idx]
+    else
+        return log_cond,log_marg
+    end
 end
 
 function eval_inner_chain(log_marg_chain;band=0)
