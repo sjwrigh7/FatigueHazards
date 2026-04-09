@@ -9,6 +9,7 @@ using GaussianProcesses
 #using Optim
 #using ADTypes
 using BlackBoxOptim
+using ProgressMeter
 
 using FatigueHazards
 #Pkg.develop(path="/home/stephenw/programming/FatigueHazards")
@@ -111,7 +112,7 @@ end
 
 ##############################################
 ## optional memory efficient aggregation of lagged samples
-n_target = 10_000
+n_target = 2500
 max_size = 50_000
 n_burn = 2000
 
@@ -275,14 +276,15 @@ test_risk = [FatigueHazards.sum_risk(j,initial_data.s_norm,bulk_samples.beta[1],
     )
 end
 
-n_sim = 10000
+n_sim = 2500
 n_rep = 10
 n_marg_evals = 2500
-log_cond_vals3 = Array{Float64}(undef,n_sim,n_rep)
-log_marg_vals3 = similar(log_cond_vals3)
+log_cond_vals0 = Array{Float64}(undef,n_sim,n_rep)
+log_marg_vals0 = Array{Float64}(undef,n_sim,n_rep)
+t_samps = Array{Float64}(undef,n_sim,n_rep)
 
 @showprogress for i in 1:n_rep
-    log_cond,log_marg_vec = FatigueHazards.eval_entropy(
+    log_cond,log_marg_vec,t = FatigueHazards.eval_entropy(
         test_design,
         initial_data,
         bulk_samples,
@@ -290,30 +292,80 @@ log_marg_vals3 = similar(log_cond_vals3)
         n_sim,
         n_marg_evals;
         results=:vector,
-        multithread=true
+        multithread=true,
+        return_times=true
     )
-    log_cond_vals3[:,i] .= log_cond
-    log_marg_vals3[:,i] .= log_marg_vec
+    log_cond_vals0[:,i] .= log_cond
+    log_marg_vals0[:,i] .= log_marg_vec
+    t_samps[:,i] .= t
 end
 
 let 
-    n = size(log_cond_vals,1)
+    p1 = plot()
+    plot!(log_cond_vals0[:,2],label=false)
+    xlims!((8500,9500))
+end
+
+let 
+    plot(t_samps[8500:9500,:],label=false)
+    #xlims!((8500,9500))
+end
+
+save_path = "/home/stephenw/Nextcloud/Documents/engr/PhD/fatigue/src/figures/"
+
+let 
+    n = size(log_cond_vals0,1)
     r_idx = sample(1:n,n,replace=false)
-    p = plot()
+
+    p1 = plot()
     for i in 1:n_rep
         plot!(
-            cumsum(log_cond_vals[r_idx,i]) ./ collect(1:n),
+            cumsum(log_cond_vals0[r_idx,i]) ./ collect(1:n),
             label=false,
             alpha=0.7
         )
     end
-    title!("MC Simulation Consistency")
+    title!("MC Consistency")
     xlabel!("MC Iteration")
-    ylabel!("MC Expectation")
+    ylabel!("MC Expectation: Log Conditional")
     #ylims!((5,6))
-    display(p)
+    display(p1)
+    #savefig(p1,save_path*"conditional.png")
+
+    p2 = plot()
+    for i in 1:n_rep
+        plot!(
+            cumsum(log_marg_vals0[r_idx,i]) ./ collect(1:n),
+            label=false,
+            alpha=0.7
+        )
+    end
+    title!("MC Consistency")
+    xlabel!("MC Iteration")
+    ylabel!("MC Expectation: Log Marginal")
+    display(p2)
+    #savefig(p2,save_path*"marginal.png")
+    #ylims!((4.7,5.4))
+
+    p3 = plot()
+    for i in 1:n_rep
+        marg_term = cumsum(log_marg_vals0[r_idx,i]) ./ collect(1:n)
+        cond_term = cumsum(log_cond_vals0[r_idx,i]) ./ collect(1:n)
+
+        plot!(
+            (cond_term .- marg_term),
+            label=false,
+            alpha=0.7
+        )
+    end
+    title!("MC Consistency")
+    xlabel!("MC Iteration")
+    ylabel!("Shannon Information")
+    display(p3)
+    #savefig(p3,save_path*"information.png")
 end
 
+#=
 let 
     m = size(log_marg_vals,2)
     n = size(log_marg_vals,1)
@@ -337,45 +389,7 @@ let
     ylabel!("MC Expectation")
     display(p)
 end
-
-let 
-    n = size(log_marg_vals,1)
-    r_idx = sample(1:n,n,replace=false)
-
-    p = plot()
-    for i in 1:n_rep
-        plot!(
-            cumsum(log_marg_vals[r_idx,i]) ./ collect(1:n),
-            label=false,
-            alpha=0.7
-        )
-    end
-    title!("MC Consistency")
-    xlabel!("MC Iteration")
-    ylabel!("MC Expectation")
-    #ylims!((4.7,5.4))
-end
-
-let 
-    n = size(log_cond_vals,1)
-    r_idx = sample(1:n,n,replace=false)
-    p = plot()
-    for i in 1:n_rep
-        marg_term = cumsum(log_marg_vals[r_idx,i]) ./ collect(1:n)
-        cond_term = cumsum(log_cond_vals[r_idx,i]) ./ collect(1:n)
-
-        plot!(
-            (cond_term .- marg_term),
-            label=false,
-            alpha=0.7
-        )
-    end
-    title!("MC Consistency")
-    xlabel!("MC Iteration")
-    ylabel!("Shannon Information")
-    display(p)
-end
-
+=#
 let 
     start = round(Int,0.5 * size(log_marg_full,1))
     start = 1
@@ -465,7 +479,7 @@ doe_bounds = [
 ]
 opt_bounds = [(0.0,1.0) for i in eachindex(doe_bounds)]
 
-init_size = 15
+init_size = 25
 n_rep = 10
 doe = LHCoptim(init_size,2,100)
 doe = scaleLHC(doe[1],doe_bounds)
@@ -491,7 +505,7 @@ begin
                 initial_data,
                 bulk_samples,
                 spl.params.design,
-                5000,
+                2500,
                 2500;
                 results=:scalar,
                 multithread=true
@@ -500,57 +514,27 @@ begin
     end
 end
 
-bad_case = 3
-n_sim = 5000
-n_rep = 10
-n_marg_evals = 2500
-log_cond_vals = Array{Float64}(undef,n_sim,n_rep)
-log_marg_vals = similar(log_cond_vals)
-
-let
-    temp_design = FatigueHazards.StepStressTest(
-        doe[bad_case,1],
-        doe[bad_case,2],
-        n_const#doe[i,3]
-    )
-
-    @showprogress for i in 1:n_rep
-        log_cond,log_marg_vec = FatigueHazards.eval_entropy(
-            temp_design,
-            initial_data,
-            bulk_samples,
-            spl.params.design,
-            n_sim,
-            n_marg_evals;
-            results=:vector,
-            multithread=true
-        )
-        log_cond_vals[:,i] .= log_cond
-        log_marg_vals[:,i] .= log_marg_vec
-    end
-end
-
 # initialize GP
 mdl = ElasticGPE(
     length(doe_bounds),
     mean = MeanConst(0.5),
     kernel = SE(repeat([-1.50],length(doe_bounds)),-2.0),
-    logNoise = -1.0,
+    logNoise = -3.0,
     capacity = 3000
 )
 
 # set priors for GP
-set_priors!(mdl.mean,[Normal(0.5,1.0)])
-set_priors!(mdl.logNoise,[Normal(-1.0,1.0)])
-set_priors!(mdl.kernel,vcat(repeat([Normal(-1.50,1.5)],length(doe_bounds)),Normal(-2.0,2.0)))
+set_priors!(mdl.mean,[Normal(0.0,100.0)])
+set_priors!(mdl.logNoise,[Normal(-3.0,1.0)])
+set_priors!(mdl.kernel,vcat(repeat([Normal(0.0,100.0)],length(doe_bounds)),Normal(0.0,1.0)))
 
-doe_long = repeat(doe_norm,inner)
-append!(mdl,permutedims(doe_norm),(ent_vals))
+#doe_long = repeat(doe_norm,inner)
+append!(mdl,permutedims(doe_norm),vec(median(ent_vals,dims=2)))
 
 try
     GaussianProcesses.optimize!(mdl,noise=false)
 catch
-    global chain = ess(mdl;nIter = 20000,noise=false)
+    global chain = ess(mdl;nIter = 20000,noise=true)
 end
 
 #chain = ess(mdl;nIter=30000,noise=false)
@@ -561,7 +545,7 @@ if length(doe_bounds) == 2
     let
         p = plot()
         plot(mdl,fill=true,label="GP",colorbartitle="Shannon Information")
-        scatter!(doe_norm[:,1],doe_norm[:,2],zcolor=ent_vals,label="Data")
+        scatter!(doe_norm[:,1],doe_norm[:,2],zcolor=vec(median(ent_vals,dims=2)),label="Data")
         xlabel!("Starting Stress")
         ylabel!("Stress Step")
     end
