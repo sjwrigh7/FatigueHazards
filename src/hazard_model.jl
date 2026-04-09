@@ -487,7 +487,7 @@ end
 """
 
 """
-function sample_t(gamma,splines,risk_terms,t_grid,tol=1e-6)
+function sample_t(gamma,splines,risk_terms,t_grid,tol=1e-8)
     # draw random uniform sample and find the first index, k, in the time grid
     # that corresponds to the survival function value exceeding u
     # k is evaluated based on the cumulative hazard function, using I_diff, meaning
