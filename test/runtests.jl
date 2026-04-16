@@ -13,7 +13,7 @@ using ProgressMeter
 
 using FatigueHazards
 #Pkg.develop(path="/home/stephenw/programming/FatigueHazards")
-using Test
+#using Test
 
 using Plots
 using StatsBase
@@ -66,8 +66,9 @@ end
 ## find approximate MLE values for beta and gamma parameters
 opt_vals = FatigueHazards.opt_lik(initial_data,spl)
 
+#=
 ## define step size for MCMC
-steps = [
+steps1 = [
     2.0, # I basis function coeffs
     3.2,
     4.0,
@@ -78,16 +79,32 @@ steps = [
     0.5 # beta
 ]
 
+steps2 = [
+    1.0, # I basis function coeffs
+    2.2,
+    7.0,
+    3.7,
+    2.0,
+    1.7,
+    6.0,
+    1.5 # beta
+]
+=#
 ##################################
 ##### mcmc sampling of beta and gamma
 ## initial mcmc samples of beta and gamma
-samples = FatigueHazards.mcmc_baseline_splines(initial_data,spl,40_000,steps,opt_vals)
+steps = FatigueHazards.find_stepsize(initial_data,spl,100,1000;
+            init_vals=opt_vals,
+            make_plots=true,show_plots=true,save_plots=false,
+            init=0.1,scale = 2.0,shape=10.0,offset=2.5)
+
+samples = FatigueHazards.mcmc_baseline_splines(initial_data,spl,10_000,steps,opt_vals)
 
 #single_time = 1.053091
 #single_n = 10_000
 #yielded_iid = Int(floor(single_n / lag))
 ## calculate necessary lag
-n_burn = 2000
+n_burn = 1000
 lag,acf_vals = FatigueHazards.find_lag(
     samples.gamma,
     samples.beta,
@@ -98,7 +115,7 @@ lag,acf_vals = FatigueHazards.find_lag(
 )
 
 ## optionally plot ACF results
-let 
+let
     p = plot()
     plot!(log.(10,acf_vals.lags),acf_vals.beta,label="beta")
     for i in axes(acf_vals.gamma,2)
@@ -113,8 +130,7 @@ end
 ##############################################
 ## optional memory efficient aggregation of lagged samples
 n_target = 2500
-max_size = 50_000
-n_burn = 2000
+max_size = 10_000
 
 @time bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
     initial_data,
@@ -133,19 +149,27 @@ n_burn = 2000
 #non_multi_time = 7.529408
 #################################
 ## eval optimal next test point
+test1 = Vector{FatigueHazards.StepStressTest}(undef,10)
+for i in 1:length(test1)
 next_test_point = FatigueHazards.optimize_design(
     bulk_samples,
     initial_data,
     spl,
-    30;
+    10;
     s_min=1e3,
     s_max=2e4,
     ds_min=-1e4,
     ds_max=1e4,
     n_max = initial_data.t_max,
-    #n_const=5e3,
-    reduce=false,
+    n_const=5e3,
+    n_mcmc=5000,
+    n_init=10,
+    n_use=3,
+    n_rep=10,
+    reduce=true,
 )
+test1[i] = next_test_point
+end
 
 let 
     p = plot()
@@ -172,12 +196,13 @@ test_point = FatigueHazards.StepStressTest(
     best_inp[2] * (1e4 + 1e4) - 1e4,
     best_inp[3] * (initial_data.t_max - 1e3) + 1e3
 )
+test_point = test1[1]
 #####################################
 ## test sequential design
-n_opt = 30
+n_opt = 10
 design_points = FatigueHazards.StepStressTest[]
-posterior_means = Array{Float64}(undef,n_opt,spl.params.num_basis + 1)
-posterior_vars = similar(posterior_means)
+beta_draws = Array{Float64}(undef,1000,n_opt)
+gamma_draws = Array{Float64}(undef,1000,size(bulk_samples.gamma,2),n_opt)
 curr_stresses = copy(initial_data.raw.stresses)
 curr_cycles = copy(initial_data.raw.cycles)
 for i in 1:n_opt
@@ -202,10 +227,31 @@ for i in 1:n_opt
     ## find approximate MLE values for beta and gamma parameters
     opt_vals = FatigueHazards.opt_lik(full_data,spl)
     ## initial mcmc samples of beta and gamma
-    samples = FatigueHazards.mcmc_baseline_splines(full_data,spl,10_000,steps,opt_vals)
+    steps = FatigueHazards.find_stepsize(
+        full_data,
+        spl,
+        100,
+        1000;
+        init_vals=opt_vals,
+        make_plots=true,
+        show_plots=true,
+        save_plots=false,
+        init=0.1,
+        scale = 2.0,
+        shape=10.0,
+        offset=2.5
+    )
+
+    samples = FatigueHazards.mcmc_baseline_splines(
+        full_data,
+        spl,
+        10_000,
+        steps,
+        opt_vals
+    )
 
     ## calculate necessary lag
-    n_burn = 2000
+    n_burn = 1000
     lag,acf_vals = FatigueHazards.find_lag(
         samples.gamma,
         samples.beta,
@@ -226,26 +272,137 @@ for i in 1:n_opt
         length_lim=max_size
     )
     
-    posterior_means[i,1] = mean(bulk_samples.beta)
-    posterior_means[i,2:end] = mean(bulk_samples.gamma,dims=1)
+    #posterior_means[i,1] = mean(bulk_samples.beta)
+    #posterior_means[i,2:end] = mean(bulk_samples.gamma,dims=1)
 
-    posterior_vars[i,1] = var(bulk_samples.beta)
-    posterior_vars[i,2:end] = var(bulk_samples.gamma,dims=1)
+    #posterior_vars[i,1] = var(bulk_samples.beta)
+    #posterior_vars[i,2:end] = var(bulk_samples.gamma,dims=1)
+
+    beta_draws[:,i] = bulk_samples.beta[1:size(beta_draws,1)]
+    gamma_draws[:,:,i] = bulk_samples.gamma[1:(size(gamma_draws,1)),:]
 
     test_point = FatigueHazards.optimize_design(
         bulk_samples,
         full_data,
         spl,
-        30;
+        10;
         s_min=1e3,
         s_max=2e4,
         ds_min=-1e4,
         ds_max=1e4,
-        n_max = full_data.t_max,
-        #n_const=5e3,
-        reduce=false,
+        n_max = initial_data.t_max,
+        n_const=5e3,
+        n_mcmc=5000,
+        n_init=10,
+        n_use=2,
+        n_rep=10,
+        reduce=true,
     )
     push!(design_points,test_point)
+end
+
+#################################
+s0_results = [d.s0 for d in design_points]
+ds_results = [d.ds for d in design_points]
+
+let 
+    p = plot()
+    scatter!(s0_results,label=false)
+    xlabel!("Iteration")
+    ylabel!("Starting Stress")
+end
+
+let 
+    p = plot()
+    scatter!(ds_results,label=false)
+    xlabel!("Iteration")
+    ylabel!("Change in Stress")
+end
+
+let 
+    p = plot()
+    scatter!(s0_results,ds_results,zcolor=collect(1:length(s0_results)),label=false)
+    xlabel!("Starting Stress")
+    ylabel!("Change in Stress")
+end
+
+let 
+    p = plot()
+    for i in axes(beta_draws,2)
+        histogram!(beta_draws[:,i],label=false,alpha=0.3)
+    end
+    display(p)
+end
+
+let 
+    stresses = Float64[]
+    times = Float64[]
+    n_cyc = 1e12
+    ds = 0.0
+    s0 = collect(
+        range(
+            start = 1000.0,
+            stop = 2e4,
+            length=1000
+        )
+    )
+    for i in eachindex(s0)
+        temp = FatigueHazards.StepStressTest(
+            s0[i],
+            ds,
+            n_cyc
+        )
+        new_data = FatigueHazards.simulate_step_stress(
+            mat,
+            [temp],
+            error_dist
+        ).raw
+        println(new_data)
+        push!(stresses,new_data.stresses[end][end])
+        push!(times,new_data.cycles[end][end])
+    end
+    plot(stresses,times)
+end
+
+begin
+    n_mcmc = 1_000
+    s_vals = collect(
+        range(
+            start = 1000.0,
+            stop = 20000.0,
+            length = 100
+        )
+    )
+    n_vals = collect(
+        range(
+            start = 3.0,
+            stop = 8.0,
+            length = 100
+        )
+    )
+    n_vals = 10 .^ (n_vals)
+    probs = Array{Float64}(undef,length(s_vals),length(n_vals))
+
+    for j in axes(probs,2)
+        for i in axes(probs,1)
+            cumul = 0
+            for k in 1:n_mcmc
+                error_sample = rand(error_dist)
+                theo_n = FatigueHazards.bilinear_sn(mat,s_vals[i])
+                obs_n = theo_n * 10 ^ error_sample
+                if obs_n <= n_vals[j]
+                    cumul += 1
+                end
+            end
+            probs[i,j] = cumul / n_mcmc
+        end
+    end
+end
+let
+    contourf(s_vals,n_vals,probs',fill=true)
+    xlabel!("Stress")
+    ylabel!("Time")
+    ylims!((1000.0,10000.0))
 end
 #################################
 design_norm = FatigueHazards.StepStressTest(
@@ -479,8 +636,8 @@ doe_bounds = [
 ]
 opt_bounds = [(0.0,1.0) for i in eachindex(doe_bounds)]
 
-init_size = 25
-n_rep = 10
+init_size = 15
+n_rep = 12
 doe = LHCoptim(init_size,2,100)
 doe = scaleLHC(doe[1],doe_bounds)
 
@@ -518,24 +675,25 @@ end
 mdl = ElasticGPE(
     length(doe_bounds),
     mean = MeanConst(0.5),
-    kernel = SE(repeat([-1.50],length(doe_bounds)),-2.0),
+    kernel = SE(repeat([-1.5],length(doe_bounds)),-2.0),
     logNoise = -3.0,
     capacity = 3000
 )
 
 # set priors for GP
-set_priors!(mdl.mean,[Normal(0.0,100.0)])
+set_priors!(mdl.mean,[Normal(0.0,2.0)])
 set_priors!(mdl.logNoise,[Normal(-3.0,1.0)])
-set_priors!(mdl.kernel,vcat(repeat([Normal(0.0,100.0)],length(doe_bounds)),Normal(0.0,1.0)))
+set_priors!(mdl.kernel,vcat(repeat([Normal(-1.5,3.0)],length(doe_bounds)),Normal(0.0,3.0)))
 
 #doe_long = repeat(doe_norm,inner)
-append!(mdl,permutedims(doe_norm),vec(median(ent_vals,dims=2)))
-
-try
-    GaussianProcesses.optimize!(mdl,noise=false)
-catch
-    global chain = ess(mdl;nIter = 20000,noise=true)
+for i in (size(ent_vals,2)-3):(size(ent_vals,2))
+    append!(mdl,permutedims(doe_norm),vec(sort(ent_vals,dims=2)[:,i]))
 end
+#try
+#    GaussianProcesses.optimize!(mdl,noise=false)
+#catch
+    global chain = ess(mdl;nIter = 10000)
+#end
 
 #chain = ess(mdl;nIter=30000,noise=false)
 let 
@@ -544,8 +702,8 @@ end
 if length(doe_bounds) == 2
     let
         p = plot()
-        plot(mdl,fill=true,label="GP",colorbartitle="Shannon Information")
-        scatter!(doe_norm[:,1],doe_norm[:,2],zcolor=vec(median(ent_vals,dims=2)),label="Data")
+        plot!(mdl,fill=true,label="GP",colorbartitle="Shannon Information")
+        scatter!(mdl.x[1,:],mdl.x[2,:],zcolor=mdl.y,label="Data")
         xlabel!("Starting Stress")
         ylabel!("Stress Step")
     end
@@ -557,7 +715,8 @@ function objective(theta)
     return -upper_CI
 end
 
-n_opt = 20
+n_opt = 15
+temp_ent = Vector{Float64}(undef,n_rep)
 begin
     for i in 1:n_opt
         #x0 = [
@@ -579,19 +738,23 @@ begin
             scaled_vals[2],
             n_const#opt_val[3],
         )
-        mdl_eval = FatigueHazards.eval_entropy(
-            temp_design,
-            initial_data,
-            bulk_samples,
-            spl.params.design,
-            2500,
-            3000;
-            results=:scalar,
-            multithread=true
-        )
+        for j in 1:n_rep
+            temp_ent[j] = FatigueHazards.eval_entropy(
+                temp_design,
+                initial_data,
+                bulk_samples,
+                spl.params.design,
+                2500,
+                3000;
+                results=:scalar,
+                multithread=true
+            )
+        end
 
-        append!(mdl,permutedims(norm_vals'),[mdl_eval])
-        chain = ess(mdl;nIter=30000,noise=true,domean=false)
+        for j in (length(temp_ent)-3):(length(temp_ent))
+            append!(mdl,permutedims(norm_vals'),[sort(temp_ent)[j]])
+        end
+        #chain = ess(mdl;nIter=5000)
         #GaussianProcesses.optimize!(mdl)
     end
 end
