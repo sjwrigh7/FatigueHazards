@@ -1,21 +1,3 @@
-struct SplineDesign
-    k::Int
-    interior_knots::Vector{Float64}
-end
-
-struct SplineParams
-    design::SplineDesign
-    knot_grid::Vector{Float64}
-    num_basis::Int
-end
-
-mutable struct Splines
-    params::SplineParams
-    I::Array{Float64,2}
-    M::Array{Float64,2}
-    I_diff::Array{Float64,2}
-end
-
 """
     m_recurse(k::Int,i::Int,t::Vector{Float64},x::Float64)
 Function for recursively evaluating a k-th order M-spline at input x.
