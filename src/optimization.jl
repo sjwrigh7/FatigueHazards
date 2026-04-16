@@ -1,20 +1,3 @@
-struct OptDesign
-    s_min::Float64
-    s_max::Float64
-    ds_min::Float64
-    ds_max::Float64
-    n_min::Float64
-    n_max::Float64
-end
-
-struct OptDesignReduced
-    s_min::Float64
-    s_max::Float64
-    ds_min::Float64
-    ds_max::Float64
-    n_const::Float64
-end
-
 function init_opt_design(s_min=1e3,s_max=2e4,ds_min=-1e4,ds_max=1e4,n_min=1e3,n_max=1e7;reduce=false,n_const=5e3)
     if reduce
         design = OptDesignReduced(
@@ -43,8 +26,9 @@ function init_data(
     data::StepStressData,
     splines::Splines;
     n_init=30,
+    n_rep=7,
     n_inner=2500,
-    n_outer=3000
+    n_outer=2500,
 )
 
     doe_bounds = [
@@ -60,34 +44,31 @@ function init_data(
 
     doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
 
-    doe_resp = Vector{Float64}(undef,n_init)
-    noise_est = similar(doe_resp)
+    doe_resp = Array{Float64}(undef,n_init,n_rep)
 
-    for i in 1:n_init
+    @showprogress "Solving initial design..." for i in 1:n_init
         temp_design = StepStressTest(
             doe[i,1],
             doe[i,2],
             doe[i,3]
         )
 
-        log_cond,log_marg = eval_entropy(
-            temp_design,
-            data,
-            samples,
-            splines.params.design,
-            n_outer,
-            n_inner,
-            results=:vector
-        )
+        for j in 1:n_rep
+            ent_val = eval_entropy(
+                temp_design,
+                data,
+                samples,
+                splines.params.design,
+                n_outer,
+                n_inner,
+                results=:scalar
+            )
 
-        entropy_est = (cumsum(log_cond) ./ collect(1:length(log_cond))) .-
-            (cumsum(log_marg) ./ (collect(1:length(log_marg))))
-        
-        noise_est[i] = var(entropy_est[(end - 500 + 1):end])
-        doe_resp[i] = entropy_est[end]
+            doe_resp[i,j] = ent_val
+        end
     end
 
-    return lower_bounds,upper_bounds,doe_norm,doe_resp,noise_est
+    return lower_bounds,upper_bounds,doe_norm,doe_resp
 end
 
 function init_data(
@@ -96,8 +77,9 @@ function init_data(
     data::StepStressData,
     splines::Splines;
     n_init=15,
+    n_rep=7,
     n_inner=2500,
-    n_outer=3000
+    n_outer=2500
 )
 
     doe_bounds = [
@@ -112,34 +94,30 @@ function init_data(
 
     doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
 
-    doe_resp = Vector{Float64}(undef,n_init)
-    noise_est = similar(doe_resp)
+    doe_resp = Array{Float64}(undef,n_init,n_rep)
 
-    for i in 1:n_init
+    @showprogress "Solving initial design..." for i in 1:n_init
         temp_design = StepStressTest(
             doe[i,1],
             doe[i,2],
             design.n_const
         )
+        for j in 1:n_rep
+            ent_val = eval_entropy(
+                temp_design,
+                data,
+                samples,
+                splines.params.design,
+                n_outer,
+                n_inner,
+                results=:scalar
+            )
 
-        log_cond,log_marg = eval_entropy(
-            temp_design,
-            data,
-            samples,
-            splines.params.design,
-            n_outer,
-            n_inner,
-            results=:vector
-        )
-
-        entropy_est = (cumsum(log_cond) ./ collect(1:length(log_cond))) .-
-            (cumsum(log_marg) ./ (collect(1:length(log_marg))))
-        
-        noise_est[i] = var(entropy_est[(end - 500 + 1):end])
-        doe_resp[i] = entropy_est[end]
+            doe_resp[i,j] = ent_val
+        end
     end
 
-    return lower_bounds,upper_bounds,doe_norm,doe_resp,noise_est
+    return lower_bounds,upper_bounds,doe_norm,doe_resp
 end
 
 function optimize_design(
@@ -156,8 +134,10 @@ function optimize_design(
     n_const=5e3,
     reduce=false,
     n_init=0,
+    n_rep=7,
+    n_use=3,
     n_inner=2500,
-    n_outer=3000,
+    n_outer=2500,
     n_mcmc=20000,
     pop_size=5000,
     max_time=1.5
@@ -183,12 +163,13 @@ function optimize_design(
     end
     println(n_init)
 
-    lower_bounds,upper_bounds,doe_norm,doe_resp,noise_est = init_data(
+    lower_bounds,upper_bounds,doe_norm,doe_resp = init_data(
         design,
         samples,
         data,
         splines;
         n_init=n_init,
+        n_rep=n_rep,
         n_inner=n_inner,
         n_outer=n_outer
     )
@@ -196,23 +177,43 @@ function optimize_design(
     opt_bounds = [(0.0,1.0) for i in eachindex(lower_bounds)]
 
     mdl = ElasticGPE(
-        length(lower_bounds),
-        mean = MeanConst(0.0),
-        kernel = SE(repeat([-1.0],length(lower_bounds)),-3.0),
-        logNoise = mean(noise_est),
-        capacity = n_init + n_opt + 50
+        length(opt_bounds),
+        mean = MeanConst(0.5),
+        kernel = SE(repeat([-1.50],length(opt_bounds)),-2.0),
+        logNoise = -3.0,
+        capacity = 3000
     )
 
-    set_priors!(mdl.mean,[Normal(0.0,2.0)])
-    set_priors!(mdl.logNoise,[Normal(mean(noise_est),0.5)])
-    set_priors!(mdl.kernel,vcat(repeat([Normal(-2.0,2.0)],length(lower_bounds)),Normal(-1.0,2.0)))
+    # set priors for GP
+    set_priors!(
+        mdl.mean,
+        [Normal(0.0,1.0)]
+    )
+    set_priors!(
+        mdl.logNoise,
+        [Normal(-3.0,3.0)]
+    )
+    set_priors!(
+        mdl.kernel,
+        vcat(
+            repeat(
+                [Normal(-1.5,3.0)],
+                length(opt_bounds)
+            ),
+            Normal(0.0,3.0)
+        )
+    )
 
-    append!(mdl,permutedims(doe_norm),doe_resp)
+    for i in 1:n_use
+        println("Initial DOE Shannon entropy = ")
+        println(vec(sort(doe_resp,dims=2)[:,i]))
+        append!(mdl,permutedims(doe_norm),vec(sort(doe_resp,dims=2,rev=true)[:,i]))
+    end
 
     try
-        optimize!(mdl,noise=false)
+        optimize!(mdl,noise=true)
     catch
-        ess(mdl;nIter=n_mcmc,noise=false)
+        ess(mdl;nIter=n_mcmc)
     end
 
     function objective(theta)
@@ -221,7 +222,14 @@ function optimize_design(
         return -upper_CI
     end
 
+    temp_ent = Vector{Float64}(undef,n_rep)
+
     for i in 1:n_opt
+        try
+            println("Model variance = ",mdl.kernel.σ2)
+            println("Model noise = ",mdl.noise)
+        catch
+        end
         opt_res = bboptimize(
             objective;
             SearchRange = opt_bounds,
@@ -246,20 +254,29 @@ function optimize_design(
             )
         end
 
-        mdl_eval = eval_entropy(
-            temp_design,
-            data,
-            samples,
-            splines.params.design,
-            n_inner,
-            n_outer;
-            results=:scalar
-        )
+        @showprogress "Solving initial design..." for j in 1:n_rep
+            ent_val = eval_entropy(
+                temp_design,
+                data,
+                samples,
+                splines.params.design,
+                n_outer,
+                n_inner,
+                results=:scalar
+            )
 
-        append!(mdl,permutedims(norm_vals'),[mdl_eval])
+            temp_ent[j] = ent_val
+        end
+
+        for j in 1:n_use
+            println("Optim point new entropy = $(temp_ent[j])")
+            append!(mdl,permutedims(norm_vals'),[sort(temp_ent,rev=true)[j]])
+        end
+
+        #append!(mdl,permutedims(norm_vals'),[mdl_eval])
         println("Appended data = [$(mdl.x[1,end]),$(mdl.x[2,end])]")
 
-        ess(mdl;nIter=n_mcmc,noise=false)
+        #ess(mdl;nIter=n_mcmc,noise=true)
     end
 
     _,best_idx = findmax(mdl.y)
