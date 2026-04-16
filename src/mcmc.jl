@@ -1,16 +1,4 @@
-struct PosteriorSamples
-    beta::Union{Array{Float64,1},Array{Float64,2}}
-    gamma::Array{Float64,2}
-    beta_accept::Union{Array{Bool,1},Array{Bool,2}}
-    gamma_accept::Array{Bool,2}
-end
-
-struct PosteriorIID
-    beta::Union{Array{Float64,1},Array{Float64,2}}
-    gamma::Array{Float64,2}
-end
-
-function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
+function mcmc_baseline_splines(data::StepStressData,splines::Splines,n_mcmc::Int,steps::StepSize,init_vals)
     fail_indic = sum(data.delta_i[2:(end-1),:],dims=2)
 
     J = length(data.t_norm)
@@ -41,7 +29,7 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
                 J,
                 risk_terms,
                 fail_indic,
-                steps[j],
+                steps.gamma[j],
                 j
             )
             gamma[j] = gamma_sample
@@ -58,7 +46,7 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
             data.delta_i,
             J,
             gamma,
-            steps[end]
+            steps.beta
         )
 
         beta = beta_sample
@@ -77,8 +65,9 @@ function mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals)
 end
 
 function mcmc_baseline_splines!(beta_draws::Vector{Float64},gamma_draws::Array{Float64,2},
-    main_risk::Vector{Float64},off_risk::Vector{Float64},
-    data,splines,n_mcmc,steps,init_vals)
+    main_risk::Vector{Float64},off_risk::Vector{Float64},beta_accept::Vector{Bool},
+    gamma_accept::Array{Bool,2},data::StepStressData,splines::Splines,
+    n_mcmc::Int,steps::StepSize,init_vals)
     fail_indic = sum(data.delta_i[2:(end-1),:],dims=2)
 
     J = length(data.t_norm)
@@ -104,7 +93,7 @@ function mcmc_baseline_splines!(beta_draws::Vector{Float64},gamma_draws::Array{F
 
     @inbounds for i in 2:n_mcmc
         @inbounds for j in 1:splines.params.num_basis
-            gamma_sample,_ = metropolis_gamma(
+            gamma_sample,acc_sample = metropolis_gamma(
                 gamma,
                 splines.M,
                 splines.I_diff,
@@ -112,14 +101,15 @@ function mcmc_baseline_splines!(beta_draws::Vector{Float64},gamma_draws::Array{F
                 J,
                 main_risk,
                 fail_indic,
-                steps[j],
+                steps.gamma[j],
                 j
             )
             gamma[j] = gamma_sample
             gamma_draws[i,j] = gamma_sample
+            gamma_accept[i,j] = acc_sample
         end
 
-        beta_sample,_ = metropolis_beta!(
+        beta_sample,acc_sample = metropolis_beta!(
             main_risk,
             off_risk,
             beta,
@@ -130,11 +120,12 @@ function mcmc_baseline_splines!(beta_draws::Vector{Float64},gamma_draws::Array{F
             data.in_risk_idx,
             J,
             gamma,
-            steps[end]
+            steps.beta
         )
 
         beta = beta_sample
         beta_draws[i] = beta
+        beta_accept[i] = acc_sample
     end
 end
 
@@ -194,8 +185,9 @@ function find_lag(gamma,beta,n_burn;target=0.05,grid_size=2000,results=false)
     end
 end
 
-function bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
-    n_burn,lag;mem_lim = 0,ele_lim = 0,length_lim = 1_000_000,multithread=true)
+function bulk_mcmc_baseline_splines(data::StepStressData,splines::Splines,
+    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,lag::Int;
+    mem_lim = 0,ele_lim = 0,length_lim = 1_000_000,multithread=true)
 
     println("Running batch MCMC to draw i.i.d. posteior samples...")
     println("The desired number of i.i.d. samples is ",n_mcmc)
@@ -246,8 +238,8 @@ function bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
 
 end
 
-function _bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
-    n_burn,lag,max_arr_len)
+function _bulk_mcmc_baseline_splines(data::StepStressData,splines::Splines,
+    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,lag::Int,max_arr_len::Int)
 
     full_beta = Vector{Float64}(undef,n_mcmc)
     full_gamma = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
@@ -305,8 +297,8 @@ function _bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
     return results
 end
 
-function _par_bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
-    n_burn,lag,max_arr_len)
+function _par_bulk_mcmc_baseline_splines(data::StepStressData,splines::Splines,
+    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,lag::Int,max_arr_len::Int)
     full_beta = Vector{Float64}(undef,n_mcmc)
     full_gamma = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
     
@@ -314,6 +306,8 @@ function _par_bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
     gamma_iter = [Array{Float64}(undef,max_arr_len,splines.params.num_basis) for _ in 1:Threads.nthreads()]
     main_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads()]
     off_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads()]
+    beta_accept = [Vector{Bool}(undef,max_arr_len) for _ in 1:Threads.nthreads()]
+    gamma_accept = [Array{Bool}(undef,max_arr_len,splines.params.num_basis) for _ in 1:Threads.nthreads()]
 
     n_avail = Int(floor((max_arr_len - n_burn) / lag))
     println("With a burn value of $n_burn, and a lag of $lag, $n_avail i.i.d. samples can be drawn per batch")
@@ -343,6 +337,8 @@ function _par_bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
             gamma_iter[Threads.threadid()-1],
             main_risk_iter[Threads.threadid()-1],
             off_risk_iter[Threads.threadid()-1],
+            beta_accept[Threads.threadid()-1],
+            gamma_accept[Threads.threadid()-1],
             data,
             splines,
             n_run,
@@ -364,6 +360,8 @@ function _par_bulk_mcmc_baseline_splines(data,splines,n_mcmc,steps,init_vals,
         gamma_iter[1],
         main_risk_iter[1],
         off_risk_iter[1],
+        beta_accept[1],
+        gamma_accept[1],
         data,
         splines,
         remainder_sim,
