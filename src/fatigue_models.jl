@@ -1,10 +1,3 @@
-struct BilinearMaterial
-    s_max::Float64
-    s_min::Float64
-    n_max::Float64
-    n_min::Float64
-    slope::Float64
-end
 
 function BilinearMaterial(s_max::Real,s_min::Real,n_max::Real,n_min::Real)
     delta_s = log(10,s_max) - log(10,s_min)

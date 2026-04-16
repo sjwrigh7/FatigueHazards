@@ -1,9 +1,3 @@
-struct StepStressTest
-    s0::Float64
-    ds::Float64
-    n::Float64
-end
-
 function single_step_stress(material::BilinearMaterial,test::StepStressTest,error_model::UnivariateDistribution)
     # initialize to not have failed
     has_failed = false
@@ -44,11 +38,6 @@ function single_step_stress(material::BilinearMaterial,test::StepStressTest,erro
     return stresses,cycles
 end
 
-struct StepStressSweep
-    s0::Vector{Float64}
-    ds::Vector{Float64}
-    n::Vector{Float64}
-end
 
 function sweep_design(s0::Vector{Float64},ds::Vector{Float64},n::Vector{Float64},n_rep::Int)
     total_count = length(s0) * length(ds) * length(n) * n_rep
@@ -80,20 +69,7 @@ function sweep_design(s0::Vector{Float64},ds::Vector{Float64},n::Vector{Float64}
     return design
 end
 
-struct StepStressRawData
-    stresses::Vector{Vector{Float64}}
-    cycles::Vector{Vector{Float64}}
-end
 
-struct StepStressData
-    raw::StepStressRawData
-    s_max::Float64
-    t_max::Float64
-    s_norm::Array{Float64,2}
-    t_norm::Array{Float64}
-    delta_i::Array{Int,2}
-    in_risk_idx::Vector{Vector{Int}}
-end
 
 function simulate_step_stress(material::BilinearMaterial,test::Vector{StepStressTest},error_model::UnivariateDistribution)
     stresses = Vector{Float64}[]
