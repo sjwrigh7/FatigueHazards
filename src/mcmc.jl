@@ -302,12 +302,12 @@ function _par_bulk_mcmc_baseline_splines(data::StepStressData,splines::Splines,
     full_beta = Vector{Float64}(undef,n_mcmc)
     full_gamma = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
     
-    beta_iter = [Vector{Float64}(undef,max_arr_len) for _ in 1:Threads.nthreads()]
-    gamma_iter = [Array{Float64}(undef,max_arr_len,splines.params.num_basis) for _ in 1:Threads.nthreads()]
-    main_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads()]
-    off_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads()]
-    beta_accept = [Vector{Bool}(undef,max_arr_len) for _ in 1:Threads.nthreads()]
-    gamma_accept = [Array{Bool}(undef,max_arr_len,splines.params.num_basis) for _ in 1:Threads.nthreads()]
+    beta_iter = [Vector{Float64}(undef,max_arr_len) for _ in 1:Threads.nthreads(:default)]
+    gamma_iter = [Array{Float64}(undef,max_arr_len,splines.params.num_basis) for _ in 1:Threads.nthreads(:default)]
+    main_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads(:default)]
+    off_risk_iter = [Vector{Float64}(undef,length(data.t_norm)-2) for _ in 1:Threads.nthreads(:default)]
+    beta_accept = [Vector{Bool}(undef,max_arr_len) for _ in 1:Threads.nthreads(:default)]
+    gamma_accept = [Array{Bool}(undef,max_arr_len,splines.params.num_basis) for _ in 1:Threads.nthreads(:default)]
 
     n_avail = Int(floor((max_arr_len - n_burn) / lag))
     println("With a burn value of $n_burn, and a lag of $lag, $n_avail i.i.d. samples can be drawn per batch")
@@ -328,17 +328,26 @@ function _par_bulk_mcmc_baseline_splines(data::StepStressData,splines::Splines,
 
     base_range = collect((n_burn + 1):lag:n_run)
 
+    #thread_ids = Vector{Int}(undef,10 * Threads.nthreads())
+    #Threads.@threads for i in eachindex(thread_ids)
+    #    thread_ids[i] = Threads.threadid()
+    #end
+
+    #thread_ids = unique(thread_ids)
+    #thread_id_map = Dict([thread_ids[i] => i for i in eachindex(thread_ids)])
+    #println(thread_id_map)
+
     Threads.@threads for i in 1:n_rep
         println("Running batch #$i on thread $(Threads.threadid()) with an MCMC chain length of $n_run, yielding $n_iid i.i.d. samples")
         start_idx = (i - 1) * n_iid + 1
         stop_idx = i * n_iid
         mcmc_baseline_splines!(
-            beta_iter[Threads.threadid()-1],
-            gamma_iter[Threads.threadid()-1],
-            main_risk_iter[Threads.threadid()-1],
-            off_risk_iter[Threads.threadid()-1],
-            beta_accept[Threads.threadid()-1],
-            gamma_accept[Threads.threadid()-1],
+            beta_iter[Threads.threadid() - Threads.nthreads(:interactive)],
+            gamma_iter[Threads.threadid() - Threads.nthreads(:interactive)],
+            main_risk_iter[Threads.threadid() - Threads.nthreads(:interactive)],
+            off_risk_iter[Threads.threadid() - Threads.nthreads(:interactive)],
+            beta_accept[Threads.threadid() - Threads.nthreads(:interactive)],
+            gamma_accept[Threads.threadid() - Threads.nthreads(:interactive)],
             data,
             splines,
             n_run,
@@ -347,8 +356,8 @@ function _par_bulk_mcmc_baseline_splines(data::StepStressData,splines::Splines,
         )
 
         thin_idx = base_range[1:n_iid]
-        beta_thin = beta_iter[Threads.threadid()-1][thin_idx]
-        gamma_thin = gamma_iter[Threads.threadid()-1][thin_idx,:]
+        beta_thin = beta_iter[Threads.threadid() - Threads.nthreads(:interactive)][thin_idx]
+        gamma_thin = gamma_iter[Threads.threadid() - Threads.nthreads(:interactive)][thin_idx,:]
         
         full_beta[start_idx:stop_idx] .= beta_thin
         full_gamma[start_idx:stop_idx,:] .= gamma_thin

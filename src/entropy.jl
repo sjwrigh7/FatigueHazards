@@ -270,7 +270,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
 
     log_cond = Vector{Float64}(undef,n_sim_outer)
     log_marg = Array{Float64}(undef,n_sim_inner,n_sim_outer)
-    mul_blank_iter = [Vector{Float64}(undef,maximum(time_grid_idx)) for _ in 1:Threads.nthreads()]
+    mul_blank_iter = [Vector{Float64}(undef,maximum(time_grid_idx)) for _ in 1:Threads.nthreads(:default)]
 
     #=
     println("risk_random = ",size(risk_random))
@@ -283,7 +283,16 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
     println("n sim = ",n_sim)
     println("I diff rand = ",size(I_diff_random))
     =#
+    #thread_ids = Vector{Int}(undef,10 * Threads.nthreads())
+    #Threads.@threads for i in eachindex(thread_ids)
+    #    thread_ids[i] = Threads.threadid()
+    #end
 
+    #println(thread_ids)
+    #thread_ids = unique(thread_ids)
+
+    #thread_id_map = Dict([thread_ids[i] => i for i in eachindex(thread_ids)])
+    #println(thread_id_map)
     @inbounds Threads.@threads for i in 1:n_sim_outer
         log_cond[i] = log_density!(
             mul_blank_iter[1],
@@ -296,7 +305,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         #log_marg_inner = 0.0
         @inbounds for j in 1:n_sim_inner
             log_marg[j,i] = log_density!(
-                mul_blank_iter[Threads.threadid() - 1],
+                mul_blank_iter[Threads.threadid() - Threads.nthreads(:interactive)],
                 combined_time,
                 risk_inner[j],
                 I_diff_inner[j],
