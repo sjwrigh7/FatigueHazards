@@ -149,9 +149,9 @@ max_size = 10_000
 #non_multi_time = 7.529408
 #################################
 ## eval optimal next test point
-test1 = Vector{FatigueHazards.StepStressTest}(undef,10)
-for i in 1:length(test1)
-next_test_point = FatigueHazards.optimize_design(
+#test1 = Vector{FatigueHazards.StepStressTest}(undef,10)
+#for i in 1:length(test1)
+test_point = FatigueHazards.optimize_design(
     bulk_samples,
     initial_data,
     spl,
@@ -168,8 +168,8 @@ next_test_point = FatigueHazards.optimize_design(
     n_rep=10,
     reduce=true,
 )
-test1[i] = next_test_point
-end
+#test1[i] = next_test_point
+#end
 
 let 
     p = plot()
@@ -199,14 +199,14 @@ test_point = FatigueHazards.StepStressTest(
 test_point = test1[1]
 #####################################
 ## test sequential design
-n_opt = 10
+n_opt = 25
 design_points = FatigueHazards.StepStressTest[]
 beta_draws = Array{Float64}(undef,1000,n_opt)
 gamma_draws = Array{Float64}(undef,1000,size(bulk_samples.gamma,2),n_opt)
 curr_stresses = copy(initial_data.raw.stresses)
 curr_cycles = copy(initial_data.raw.cycles)
 for i in 1:n_opt
-    new_data = FatigueHazards.simulate_step_stress(
+    global new_data = FatigueHazards.simulate_step_stress(
         mat,
         [test_point],
         error_dist
@@ -218,7 +218,7 @@ for i in 1:n_opt
         combined_stresses,
         combined_cycles
     )
-    full_data = FatigueHazards.partition_time(combined_data)
+    global full_data = FatigueHazards.partition_time(combined_data)
     ## generate splines
     spline_order = 4
     n_int = 3
@@ -281,29 +281,37 @@ for i in 1:n_opt
     beta_draws[:,i] = bulk_samples.beta[1:size(beta_draws,1)]
     gamma_draws[:,:,i] = bulk_samples.gamma[1:(size(gamma_draws,1)),:]
 
-    test_point = FatigueHazards.optimize_design(
+    global test_point = FatigueHazards.optimize_design(
         bulk_samples,
         full_data,
         spl,
-        10;
+        12;
         s_min=1e3,
         s_max=2e4,
         ds_min=-1e4,
         ds_max=1e4,
         n_max = initial_data.t_max,
-        n_const=5e3,
+        n_min=1000,
         n_mcmc=5000,
         n_init=10,
         n_use=2,
         n_rep=10,
-        reduce=true,
+        reduce=false,
     )
     push!(design_points,test_point)
+    
+    curr_stresses = copy(full_data.raw.stresses)
+    curr_cycles = copy(full_data.raw.cycles)
 end
 
 #################################
 s0_results = [d.s0 for d in design_points]
 ds_results = [d.ds for d in design_points]
+n_results = [d.n for d in design_points]
+
+writedlm("../examples/test2-design_points.txt",hcat(s0_results,ds_results,n_results))
+writedlm("../examples/test2-beta_post.txt",beta_draws[:,1:length(design_points)])
+writedlm("../examples/test2-gamma_post.txt",gamma_draws[:,:,1:length(design_points)])
 
 let 
     p = plot()
@@ -330,6 +338,14 @@ let
     p = plot()
     for i in axes(beta_draws,2)
         histogram!(beta_draws[:,i],label=false,alpha=0.3)
+    end
+    display(p)
+end
+
+let 
+    p = plot()
+    for i in axes(gamma_draws,3)
+        histogram!(gamma_draws[:,7,i],label=false,alpha=0.3)
     end
     display(p)
 end
@@ -365,44 +381,44 @@ let
 end
 
 begin
-    n_mcmc = 1_000
+    n_mcmc = 1000
     s_vals = collect(
         range(
             start = 1000.0,
             stop = 20000.0,
-            length = 100
+            length = 300
         )
     )
     n_vals = collect(
         range(
             start = 3.0,
             stop = 8.0,
-            length = 100
+            length = 300
         )
     )
     n_vals = 10 .^ (n_vals)
-    probs = Array{Float64}(undef,length(s_vals),length(n_vals))
+    prob_vals = Array{Float64}(undef,length(s_vals),length(n_vals))
 
-    for j in axes(probs,2)
-        for i in axes(probs,1)
+    for j in axes(prob_vals,2)
+        for i in axes(prob_vals,1)
             cumul = 0
             for k in 1:n_mcmc
-                error_sample = rand(error_dist)
+                error_sample = rand(error_dist) #rand(Normal(0.0,0.2))
                 theo_n = FatigueHazards.bilinear_sn(mat,s_vals[i])
                 obs_n = theo_n * 10 ^ error_sample
                 if obs_n <= n_vals[j]
                     cumul += 1
                 end
             end
-            probs[i,j] = cumul / n_mcmc
+            prob_vals[i,j] = cumul / n_mcmc
         end
     end
 end
 let
-    contourf(s_vals,n_vals,probs',fill=true)
+    contourf(s_vals,n_vals,prob_vals',fill=true,lw=0,yaxis=:log)#,yaxis=:log)
     xlabel!("Stress")
     ylabel!("Time")
-    ylims!((1000.0,10000.0))
+    #ylims!((1000.0,10000.0))
 end
 #################################
 design_norm = FatigueHazards.StepStressTest(
