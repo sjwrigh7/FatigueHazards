@@ -2,7 +2,7 @@
     log_lik(x::)
 Log-likelihood of the hazard model for M/I spline baseline hazards and linear risk.
 """
-function log_lik(x,gamma,M,I_diff,J,risk_terms,fail_indic)
+function log_lik(gamma,M,I_diff,J,risk_terms,fail_indic)
     delta_cumulative_base_hazards = I_diff * gamma
     term1 = - sum(risk_terms .* delta_cumulative_base_hazards)
 
@@ -63,6 +63,32 @@ function sum_risk(j::Int,x::Array{Float64,2},beta::ForwardDiff.Dual,in_risk_idx:
 end
 
 """
+    sum_risk()
+Method of the `sum_risk` function for M-spline regression of risk function instead of a linear model
+"""
+function sum_risk(j::Int,M_beta::Array{Float64,2},beta::Vector{Float64},in_risk_idx::Vector{Vector{Int}},s_map::Array{Int,2})
+    idx = in_risk_idx[j]
+
+    sum_risk = 0.0
+    for i in idx
+        s = M_beta[s_map[j,i],:]
+        sum_risk += exp(s' * beta)
+    end
+    return sum_risk
+end
+
+function sum_risk(j::Int,M_beta::Array{Float64,2},beta,in_risk_idx::Vector{Vector{Int}},s_map::Array{Int,2})
+    idx = in_risk_idx[j]
+
+    sum_risk = 0.0
+    for i in idx
+        s = M_beta[s_map[j,i],:]
+        sum_risk += exp(s' * beta)
+    end
+    return sum_risk
+end
+
+"""
     in_risk(j,delta_i)
 Evaluates the set of specimens that have not yet failed at index j of the time vector
 """
@@ -92,7 +118,7 @@ Evaluates the cumulative hazard function over a time grid with corresponding val
 time varying covariates with a linear risk function, with precomputed sum of I spline basis functions
 """
 function cumulative_hazard(x::Vector{Float64},beta::Float64,
-    I_diff::Array{Float64,2})
+    I_diff::Vector{Float64})
 
     risk = exp.(x * beta)
 
@@ -100,6 +126,8 @@ function cumulative_hazard(x::Vector{Float64},beta::Float64,
 
     return c_hazard
 end
+
+
 
 """
 Evaluates the cumulative hazard function over a time grid with precomputed sum of I spline basis functions
@@ -111,6 +139,28 @@ function cumulative_hazard(risk::Vector{Float64},I_diff::Vector{Float64})
 
     return c_hazard
 end
+
+"""
+Evaluates the cumulative hazard over a time grid with I spline basis functions for the baseline hazard function and
+M spline for the risk function
+"""
+function cumulative_hazard(M_beta::Array{Float64,2},beta::Vector{Float64},I_diff_gamma::Array{Float64,2},gamma::Vector{Float64})
+    
+    risk = exp.(M_beta * beta)
+
+    c_hazard = cumsum(risk .* (I_diff_gamma * gamma))
+
+    return c_hazard
+end
+
+#"""
+#    Evaluates the cumulative hazard over a time grid for precomputed M spline risk function and precomputed I spline baseline hazard
+#"""
+#function cumulative_hazard(M_beta::Vector{Float64},I_diff_gamma::Vector{Float64})
+#    c_hazard = cumsum(M_beta .* I_diff_gamma)
+#
+#    return c_hazard
+#end
 
 """
 Evaluates the cumulative hazard function over a time grid with precomputed sum of I spline basis functions
@@ -138,7 +188,7 @@ end
 Evaluates the cumulative hazard function over a time grid with precomputed sum of I spline basis functions
 and a precomputed risk
 """
-function cumulative_hazard_scalar(mul_blank::SubArray{Float64},risk::SubArray{Float64},I_diff::SubArray{Float64})
+function cumulative_hazard_scalar(mul_blank::SubArray{Float64},risk::SubArray{Float64,1},I_diff::SubArray{Float64,1})
 
     mul_blank .= risk .* I_diff
     c_hazard = sum(mul_blank)
@@ -163,6 +213,23 @@ function survival(x::Vector{Float64},beta::Float64,
     )
 
     survival = exp.(-c_hazard)
+end
+
+"""
+Evaluates the survival function over a grid of time values with time varying covariates using I splines for the baseline hazard function and M
+splines for the risk function
+"""
+function survival(M_beta::Array{Float64,2},beta::Vector{Float64},I_diff::Array{Float64,2},gamma::Vector{Float64})
+    c_hazard = cumulative_hazard(
+        M_beta,
+        beta,
+        I_diff,
+        gamma
+    )
+
+    survival = exp.(-c_hazard)
+
+    return survival
 end
 
 """
@@ -413,6 +480,47 @@ function init_design(design::StepStressTest,spline_design::SplineDesign)
     )
 
     return splines,stress_grid,t_grid
+end
+
+function init_design(design::StepStressTest,base_haz_spline::SplineDesign,risk_spline::SplineDesign)
+    # init time grid from 0 to maximum failure time in original data
+    t_grid = collect(range(
+        start = 0.0,
+        step = design.n,
+        stop = 1.0
+    ))
+    #println(design.n)
+    # init stress grid over length of time grid
+    stress_grid = vcat(
+        0.0,
+        collect(range(
+            start = design.s0,
+            step = design.ds,
+            length = length(t_grid)-1
+        ))
+    )
+
+    if design.ds < 0.0
+        target_idx = findlast(x -> x > 0.0,stress_grid)
+        #println(stress_grid[1:5])
+        #println(target_idx)
+        target_stress = stress_grid[target_idx]
+        stress_grid[target_idx:end] .= target_stress
+    end
+
+    base_haz_splines = generate_splines(
+        base_haz_spline.k,
+        base_haz_spline.interior_knots,
+        t_grid
+    )
+
+    risk_splines = generate_splines(
+        risk_spline.k,
+        risk_spline.interior_knots,
+        t_grid
+    )
+
+    return base_haz_splines,risk_splines,stress_grid,t_grid
 end
 
 """

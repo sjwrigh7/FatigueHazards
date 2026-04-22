@@ -56,6 +56,67 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
     end
 end
 
+function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
+    base_haz_spline::SplineDesign,risk_spline::SplineDesign,
+    n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true,
+    return_times=false)
+
+    if multithread
+        temp = _par_eval_entropy(
+            design,
+            data,
+            posterior_iid,
+            base_haz_spline,
+            risk_spline,
+            n_sim_outer,
+            n_sim_inner;
+            return_times=return_times
+        )
+        log_cond = temp[1]
+        log_marg = temp[2]
+        if return_times
+            t_samples = temp[3]
+        end
+    else
+        log_cond,log_marg = _eval_entropy(
+            design,
+            data,
+            posterior_iid,
+            base_haz_spline,
+            risk_spline,
+            n_sim_outer,
+            n_sim_inner
+        )
+    end
+
+
+    log_marg = eval_log_marg(log_marg; res=:full)
+
+    if results == :full
+        if return_times
+            return log_cond,log_marg,t_samples
+        else
+            return log_cond,log_marg
+        end
+    else
+        if return_times
+            if results == :vector
+                return log_cond, log_marg[end,:], t_samples
+            elseif results == :scalar
+                ent = mean(log_cond) - mean(log_marg[end,:])
+                return ent, t_samples
+            end
+        else
+            if results == :vector
+                return log_cond, log_marg[end,:]
+            elseif results == :scalar
+                ent = mean(log_cond) - mean(log_marg[end,:])
+                return ent
+            end
+        end
+    end
+end
+
 function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
     spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner)
 
@@ -157,6 +218,123 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
     println("n sim = ",n_sim)
     println("I diff rand = ",size(I_diff_random))
     =#
+
+    for i in 1:n_sim_outer
+        log_cond[i] = log_density!(
+            mul_blank,
+            combined_time,
+            risk_outer[param_idx[i]],
+            I_diff_outer[param_idx[i]],
+            M_outer[param_idx[i]],
+            time_grid_idx[i]
+        )
+        #log_marg_inner = 0.0
+        for j in 1:n_sim_inner
+            log_marg[j,i] = log_density!(
+                mul_blank,
+                combined_time,
+                risk_inner[j],
+                I_diff_inner[j],
+                M_inner[j],
+                time_grid_idx[i]
+            )
+        end
+    end
+
+    return log_cond,log_marg
+end
+
+function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
+    base_haz_spline::SplineDesign,risk_spline::SplineDesign,n_sim_outer::Int,n_sim_inner)
+
+    sample_avail = size(posterior_iid.beta,1)
+
+    design_norm = StepStressTest(
+        design.s0 / data.s_max,
+        design.ds / data.s_max,
+        design.n / data.t_max
+    )
+
+    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(design_norm,base_haz_spline,risk_spline)
+    #println(t_grid)
+
+    if n_sim_outer > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_outer...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_outer = min(n_sim_outer,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_outer")
+    end
+    if n_sim_inner > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_inner...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_inner = min(n_sim_inner,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_inner")
+    end
+    
+    outer_idx = sample(1:sample_avail,n_sim_outer,replace=false)
+
+    beta_outer = posterior_iid.beta[outer_idx,:]
+    gamma_outer = posterior_iid.gamma[outer_idx,:]
+
+    thin_val = Int(floor(sample_avail / n_sim_inner))
+    inner_idx = (
+        collect(
+            range(
+                start = 1,
+                step = thin_val,
+                length = n_sim_inner
+            )
+        )
+    )
+
+
+    beta_inner = posterior_iid.beta[inner_idx,:]
+    gamma_inner = posterior_iid.gamma[inner_idx,:]
+
+    t_samples = Vector{Float64}(undef,n_sim_outer)
+    ks = Vector{Int}(undef,n_sim_outer)
+
+    for i in 1:n_sim_outer
+        # pre calculate risk terms over time grid
+        risk_terms = exp.(risk_splines.M[2:end,:] * beta_outer[i,:])
+        #risk_terms = exp.(stress_grid[2:end] .* beta_outer[i])
+        #println(r_gamma[i,:])
+        t,k = sample_t(
+            gamma_outer[i,:],
+            base_haz_splines,
+            risk_terms,
+            t_grid,
+            1e-6
+        )
+        t_samples[i] = t
+        ks[i] = k
+    end
+
+
+
+    combined_time,combined_stress,time_grid_idx,param_idx = merge_grids(
+        t_grid,
+        stress_grid,
+        t_samples,
+        ks
+    )
+
+    update_x!(base_haz_splines,combined_time)
+    update_x!(risk_splines,combined_stress)
+    ####################
+    # try precomputing all vals
+    risk_outer = [exp.(risk_splines.M * beta_outer[i,:]) for i in axes(beta_outer,1)]
+    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+
+    risk_inner = [exp.(risk_splines.M * beta_inner[j,:]) for j in axes(beta_inner,1)]
+    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    ####################
+
+    log_cond = Vector{Float64}(undef,n_sim_outer)
+    log_marg = Array{Float64}(undef,n_sim_inner,n_sim_outer)
+    mul_blank = Vector{Float64}(undef,maximum(time_grid_idx))
 
     for i in 1:n_sim_outer
         log_cond[i] = log_density!(
@@ -293,6 +471,127 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
 
     #thread_id_map = Dict([thread_ids[i] => i for i in eachindex(thread_ids)])
     #println(thread_id_map)
+    @inbounds Threads.@threads for i in 1:n_sim_outer
+        log_cond[i] = log_density!(
+            mul_blank_iter[1],
+            combined_time,
+            risk_outer[param_idx[i]],
+            I_diff_outer[param_idx[i]],
+            M_outer[param_idx[i]],
+            time_grid_idx[i]
+        )
+        #log_marg_inner = 0.0
+        @inbounds for j in 1:n_sim_inner
+            log_marg[j,i] = log_density!(
+                mul_blank_iter[Threads.threadid() - Threads.nthreads(:interactive)],
+                combined_time,
+                risk_inner[j],
+                I_diff_inner[j],
+                M_inner[j],
+                time_grid_idx[i]
+            )
+        end
+    end
+
+    if return_times
+        return log_cond,log_marg,combined_time[time_grid_idx]
+    else
+        return log_cond,log_marg
+    end
+end
+
+function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
+    base_haz_spline::SplineDesign,risk_spline::SplineDesign,n_sim_outer::Int,n_sim_inner;
+    return_times=false)
+
+    sample_avail = size(posterior_iid.beta,1)
+
+    design_norm = StepStressTest(
+        design.s0 / data.s_max,
+        design.ds / data.s_max,
+        design.n / data.t_max
+    )
+
+    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(design_norm,base_haz_spline,risk_spline)
+    #println(t_grid)
+
+    if n_sim_outer > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_outer...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_outer = min(n_sim_outer,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_outer")
+    end
+    if n_sim_inner > sample_avail
+        @warn "The number of desired outer Monte Carlo samples is $n_sim_inner...
+        but only $(sample_avail) realizations of β and γ are available."
+        n_sim_inner = min(n_sim_inner,sample_avail)
+        println("Reducing the number of outer Monte Carlo simulation points to $n_sim_inner")
+    end
+    
+    outer_idx = sample(1:sample_avail,n_sim_outer,replace=false)
+
+    beta_outer = posterior_iid.beta[outer_idx,:]
+    gamma_outer = posterior_iid.gamma[outer_idx,:]
+
+    thin_val = Int(floor(sample_avail / n_sim_inner))
+    inner_idx = (
+        collect(
+            range(
+                start = 1,
+                step = thin_val,
+                length = n_sim_inner
+            )
+        )
+    )
+
+
+    beta_inner = posterior_iid.beta[inner_idx,:]
+    gamma_inner = posterior_iid.gamma[inner_idx,:]
+
+    t_samples = Vector{Float64}(undef,n_sim_outer)
+    ks = Vector{Int}(undef,n_sim_outer)
+
+    for i in 1:n_sim_outer
+        # pre calculate risk terms over time grid
+        risk_terms = exp.(risk_splines.M[2:end,:] * beta_outer[i,:])
+        #risk_terms = exp.(stress_grid[2:end] .* beta_outer[i])
+        #println(r_gamma[i,:])
+        t,k = sample_t(
+            gamma_outer[i,:],
+            base_haz_splines,
+            risk_terms,
+            t_grid,
+            1e-6
+        )
+        t_samples[i] = t
+        ks[i] = k
+    end
+
+    combined_time,combined_stress,time_grid_idx,param_idx = merge_grids(
+        t_grid,
+        stress_grid,
+        t_samples,
+        ks
+    )
+    println(typeof(combined_stress))
+    println(size(combined_stress))
+    update_x!(base_haz_splines,combined_time)
+    update_x!(risk_splines,combined_stress)
+    ####################
+    # try precomputing all vals
+    risk_outer = [exp.(risk_splines.M * beta_outer[i,:]) for i in axes(beta_outer,1)]
+    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+
+    risk_inner = [exp.(risk_splines.M * beta_inner[j,:]) for j in axes(beta_inner,1)]
+    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    ####################
+
+    log_cond = Vector{Float64}(undef,n_sim_outer)
+    log_marg = Array{Float64}(undef,n_sim_inner,n_sim_outer)
+    mul_blank_iter = [Vector{Float64}(undef,maximum(time_grid_idx)) for _ in 1:Threads.nthreads(:default)]
+
     @inbounds Threads.@threads for i in 1:n_sim_outer
         log_cond[i] = log_density!(
             mul_blank_iter[1],
