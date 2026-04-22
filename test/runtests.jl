@@ -1,6 +1,6 @@
 cd(@__DIR__)
-using Pkg
-Pkg.activate("..")
+#using Pkg
+#Pkg.activate("..")
 
 using Revise
 using Distributions
@@ -56,16 +56,35 @@ initial_data = FatigueHazards.simulate_step_stress(mat,initial_design,error_dist
 ######################################
 ## generate splines
 begin
-    spline_order = 4
-    n_int = 3
-    spl = FatigueHazards.init(initial_data,spline_order,n_int)
+    base_haz_spline_order = 4
+    base_haz_n_int = 3
+    risk_spline_order = 4
+    risk_n_int = 1
+    base_haz_spl,risk_spl = FatigueHazards.init(initial_data,base_haz_spline_order,base_haz_n_int,risk_spline_order,risk_n_int)
+    s_map = FatigueHazards.map_unique(initial_data)
 end
 
 ######################################
 ##### set up for MCMC
 ## find approximate MLE values for beta and gamma parameters
-opt_vals = FatigueHazards.opt_lik(initial_data,spl)
+opt_vals = FatigueHazards.opt_lik(initial_data,base_haz_spl,risk_spl,s_map)
 
+opt_vals = 0.5 * ones(base_haz_spl.params.num_basis + risk_spl.params.num_basis)
+
+test_steps = FatigueHazards.StepSize(
+    0.25 * ones(risk_spl.params.num_basis),
+    1.0 * ones(base_haz_spl.params.num_basis)
+)
+
+test1 = FatigueHazards.mcmc_risk_splines(
+    initial_data,
+    base_haz_spl,
+    risk_spl,
+    1000,
+    test_steps,
+    s_map,
+    opt_vals
+)
 #=
 ## define step size for MCMC
 steps1 = [
@@ -93,12 +112,31 @@ steps2 = [
 ##################################
 ##### mcmc sampling of beta and gamma
 ## initial mcmc samples of beta and gamma
-steps = FatigueHazards.find_stepsize(initial_data,spl,100,1000;
+steps = FatigueHazards.find_stepsize(initial_data,
+            base_haz_spl,
+            risk_spl,
+            100,
+            1000,
+            s_map;
+            target=[0.37,0.5],
             init_vals=opt_vals,
             make_plots=true,show_plots=true,save_plots=false,
-            init=0.1,scale = 2.0,shape=10.0,offset=2.5)
+            init=0.001,scale = 2.0,shape=10.0,offset=2.5)
 
-samples = FatigueHazards.mcmc_baseline_splines(initial_data,spl,10_000,steps,opt_vals)
+test_steps = FatigueHazards.StepSize(
+    [1e-12,1e-12,1.0,0.7,0.6,0.3,1e-12],
+    [6.0,3.5,5.8,3.0,1e-12,1e-12,2.8]
+)
+#samples = FatigueHazards.mcmc_risk_splines(initial_data,spl,10_000,steps,opt_vals)
+samples = FatigueHazards.mcmc_risk_splines(
+    initial_data,
+    base_haz_spl,
+    risk_spl,
+    20_000,
+    steps,
+    s_map,
+    opt_vals
+)
 
 #single_time = 1.053091
 #single_n = 10_000
@@ -132,9 +170,11 @@ end
 n_target = 2500
 max_size = 10_000
 
-@time bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
+@time bulk_samples = FatigueHazards.bulk_mcmc_risk_splines(
     initial_data,
-    spl,
+    base_haz_spl,
+    risk_spl,
+    s_map,
     n_target,
     steps,
     opt_vals,
@@ -429,7 +469,8 @@ design_norm = FatigueHazards.StepStressTest(
 
 test1 = FatigueHazards.init_design(
     design_norm,
-    spl.params.design
+    base_haz_spl.params.design,
+    risk_spl.params.design
 )
 
 
@@ -461,7 +502,8 @@ t_samps = Array{Float64}(undef,n_sim,n_rep)
         test_design,
         initial_data,
         bulk_samples,
-        spl.params.design,
+        base_haz_spl.params.design,
+        risk_spl.params.design,
         n_sim,
         n_marg_evals;
         results=:vector,
