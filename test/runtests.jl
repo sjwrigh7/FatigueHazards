@@ -15,6 +15,7 @@ using FatigueHazards
 #Pkg.develop(path="/home/stephenw/programming/FatigueHazards")
 #using Test
 
+using StatsPlots
 using Plots
 using StatsBase
 using Profile
@@ -67,24 +68,29 @@ end
 ######################################
 ##### set up for MCMC
 ## find approximate MLE values for beta and gamma parameters
-opt_vals = FatigueHazards.opt_lik(initial_data,base_haz_spl,risk_spl,s_map)
-
-opt_vals = 0.5 * ones(base_haz_spl.params.num_basis + risk_spl.params.num_basis)
-
-test_steps = FatigueHazards.StepSize(
-    0.25 * ones(risk_spl.params.num_basis),
-    1.0 * ones(base_haz_spl.params.num_basis)
-)
-
-test1 = FatigueHazards.mcmc_risk_splines(
+opt_vals = FatigueHazards.opt_lik(
     initial_data,
     base_haz_spl,
-    risk_spl,
-    1000,
-    test_steps,
-    s_map,
-    opt_vals
-)
+    #risk_spl,
+    #s_map
+    )
+
+#opt_vals = 0.5 * ones(base_haz_spl.params.num_basis + risk_spl.params.num_basis)
+
+#test_steps = FatigueHazards.StepSize(
+#    0.25 * ones(risk_spl.params.num_basis),
+#    1.0 * ones(base_haz_spl.params.num_basis)
+#)
+
+#test1 = FatigueHazards.mcmc_risk_splines(
+#    initial_data,
+#    base_haz_spl,
+#    risk_spl,
+#    1000,
+#    test_steps,
+#    s_map,
+#    opt_vals
+#)
 #=
 ## define step size for MCMC
 steps1 = [
@@ -114,19 +120,19 @@ steps2 = [
 ## initial mcmc samples of beta and gamma
 steps = FatigueHazards.find_stepsize(initial_data,
             base_haz_spl,
-            risk_spl,
+            #risk_spl,
             100,
-            1000,
-            s_map;
+            1000;
+            #s_map;
             target=[0.37,0.5],
             init_vals=opt_vals,
-            make_plots=true,show_plots=true,save_plots=false,
+            make_plots=false,show_plots=false,save_plots=false,
             init=0.001,scale = 2.0,shape=10.0,offset=2.5)
 
-test_steps = FatigueHazards.StepSize(
-    [1e-12,1e-12,1.0,0.7,0.6,0.3,1e-12],
-    [6.0,3.5,5.8,3.0,1e-12,1e-12,2.8]
-)
+#test_steps = FatigueHazards.StepSize(
+#    [1e-12,1e-12,1.0,0.7,0.6,0.3,1e-12],
+#    [6.0,3.5,5.8,3.0,1e-12,1e-12,2.8]
+#)
 #samples = FatigueHazards.mcmc_risk_splines(initial_data,spl,10_000,steps,opt_vals)
 samples = FatigueHazards.mcmc_risk_splines(
     initial_data,
@@ -167,8 +173,20 @@ end
 
 ##############################################
 ## optional memory efficient aggregation of lagged samples
-n_target = 2500
+n_target = 1200
 max_size = 10_000
+
+@time bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
+    initial_data,
+    base_haz_spl,
+    n_target,
+    steps,
+    opt_vals,
+    n_burn,
+    lag;
+    length_lim=max_size,
+    multithread=true
+)
 
 @time bulk_samples = FatigueHazards.bulk_mcmc_risk_splines(
     initial_data,
@@ -183,6 +201,76 @@ max_size = 10_000
     length_lim=max_size,
     multithread=true
 )
+
+begin
+    n_sample = 1000
+    stress_design = exp.(
+        collect(
+            range(
+                start = log(1000.0 / initial_data.s_max),
+                stop = log(1.0),
+                length = 150
+            )
+        )
+    )
+    t_samples = Array{Float64}(undef,n_sample,length(stress_design))
+    t_grid = vcat(
+        0.0,
+        exp.(
+            collect(
+                range(
+                    start = log(1e-4),
+                    stop = log(1.0),
+                    length = 1000
+                )
+            )
+        )
+    )
+    FatigueHazards.update_x!(risk_spl,stress_design)
+    FatigueHazards.update_x!(base_haz_spl,t_grid)
+    for i in eachindex(stress_design)
+        stress_grid = repeat([stress_design[i]],length(t_grid)-1)
+        M_beta = repeat(risk_spl.M[i,:]',length(t_grid)-1)
+        for j in 1:n_sample
+            
+            # pre calculate risk terms over time grid
+            #risk_terms = exp.(M_beta * bulk_samples.beta[j,:])
+            risk_terms = exp.(stress_grid .* bulk_samples.beta[j])
+            #println(r_gamma[i,:])
+            t,_ = FatigueHazards.sample_t(
+                bulk_samples.gamma[j,:],
+                base_haz_spl,
+                risk_terms,
+                t_grid,
+                1e-6
+            )
+            t_samples[j,i] = t
+        end
+    end
+end
+let 
+    tmp1 = log.(10,stress_design .* initial_data.s_max)
+    tmp2 = log.(10,t_samples .* initial_data.t_max)
+    if minimum(t_samples) == 0.0
+        #t_samples .+= sqrt(eps(Float64))
+    end
+    p = plot(left_margin=20Plots.mm,
+        bottom_margin=20Plots.mm,
+        size=(1400,1000)
+    )
+    #xlabel!("test")
+    errorline!(
+        tmp1,
+        tmp2,
+        #label=false,
+        #xaxis=:log,
+        #yaxis=:log
+    )
+    plot!(
+        [log(10,s_min),log(10,s_max)],
+        [log(10,n_max),log(10,n_min)]
+    )
+end
 #n_rep = Int(floor((n_target / yielded_iid) * (single_n / max_size)))
 #est_time = (n_rep * single_time / 12 + single_time) * (max_size / single_n)
 #multi_time = 3.272694
