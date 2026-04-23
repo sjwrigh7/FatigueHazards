@@ -112,7 +112,7 @@ end
 
 # more efficient metropolis function
 function metropolis_beta!(main_risk::Vector{Float64},off_risk::Vector{Float64},beta::Float64,
-    M::Array{Float64,2},I_diff::Array{Float64,2},stresses::Array{Float64,2},fail_indic::Vector{Int},
+    M::Array{Float64,2},I_diff::Array{Float64,2},stresses::Array{Float64,2},fail_indic::Array{Int,2},
     in_risk_idx::Vector{Vector{Int}},J::Int,gamma::Vector{Float64},step::Float64)
 
     current_beta = beta
@@ -121,8 +121,8 @@ function metropolis_beta!(main_risk::Vector{Float64},off_risk::Vector{Float64},b
     proposed_beta = exp(proposed_transformed)
 
     @inbounds for j in eachindex(main_risk)
-        main_risk[j] = sum_risk(j+1,stresses,current_beta,in_risk_idx,s_map)
-        off_risk[j] = sum_risk(j+1,stresses,proposed_beta,in_risk_idx,s_map)
+        main_risk[j] = sum_risk(j+1,stresses,current_beta,in_risk_idx)
+        off_risk[j] = sum_risk(j+1,stresses,proposed_beta,in_risk_idx)
     end
 
     current_lik = log_lik(gamma,M,I_diff,J,main_risk,fail_indic)
