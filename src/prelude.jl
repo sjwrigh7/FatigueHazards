@@ -84,7 +84,7 @@ function opt_lik(data::StepStressData,splines::Splines)
         fail_indic = sum(data.delta_i[2:(end-1),:],dims=2)
 
         risk_terms = [sum_risk(j,data.s_norm,beta,data.delta_i) for j in 2:(J-1)]
-        lik = log_lik(data.s_norm,gamma,splines.M,splines.I_diff,J,risk_terms,fail_indic)
+        lik = log_lik(gamma,splines.M,splines.I_diff,J,risk_terms,fail_indic)
         #log_lik = log_lik_splines(stresses,delta_i,Ts,beta,gamma,M_star,I_star)
         return -lik
     end
