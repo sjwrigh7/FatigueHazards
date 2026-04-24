@@ -37,13 +37,13 @@ mat = FatigueHazards.BilinearMaterial(
 ####################################
 #### generate synthetic data
 
-#s0 = [1000.0,3000.0,6000.0,10000.0]
-#ds = [1000.0,2000.0,4000.0,6000.0]
-#n0 = [1e3,1e5,1e7]
+s0 = [1000.0,2000.0,4000.0,6000.0,8000.0,10000.0,14000.0]
+ds = [0.0,100.0,1000.0,2000.0,4000.0,6000.0]
+n0 = [1e3,1e4,1e5,1e6,1e7]
 ## test design
-s0 = [1000.0,6000.0] # starting stress
-ds = [2000.0,6000.0] # stress step
-n0 = [1e4,1e6] # number of cycles per stress level
+#s0 = [1000.0,6000.0] # starting stress
+#ds = [2000.0,6000.0] # stress step
+#n0 = [1e4,1e6] # number of cycles per stress level
 n_rep = 3 # number of i.i.d. samples per test design point
 
 # material strength error
@@ -61,20 +61,72 @@ begin
     base_haz_n_int = 3
     risk_spline_order = 4
     risk_n_int = 1
-    base_haz_spl,risk_spl = FatigueHazards.init(initial_data,base_haz_spline_order,base_haz_n_int,risk_spline_order,risk_n_int)
-    s_map = FatigueHazards.map_unique(initial_data)
+    #base_haz_spl,risk_spl = FatigueHazards.init(initial_data,base_haz_spline_order,base_haz_n_int,risk_spline_order,risk_n_int)
+    #s_map = FatigueHazards.map_unique(initial_data)
+    base_haz_spl = FatigueHazards.init(initial_data,base_haz_spline_order,base_haz_n_int)
 end
 
 ######################################
 ##### set up for MCMC
-## find approximate MLE values for beta and gamma parameters
-opt_vals = FatigueHazards.opt_lik(
-    initial_data,
-    base_haz_spl,
-    #risk_spl,
-    #s_map
+begin
+    ## find approximate MLE values for beta and gamma parameters
+    opt_vals = FatigueHazards.opt_lik(
+        initial_data,
+        base_haz_spl,
+        #risk_spl,
+        #s_map
+        )
+    ## initial mcmc samples of beta and gamma
+    steps = FatigueHazards.find_stepsize(
+        initial_data,
+        base_haz_spl,
+        #risk_spl,
+        100,
+        1000;
+        #s_map;
+        target=[0.37,0.5],
+        init_vals=opt_vals,
+        make_plots=false,
+        show_plots=false,
+        save_plots=false,
+        init=0.001,
+        scale = 2.0,
+        shape=10.0,
+        offset=2.5
+    )
+    samples = FatigueHazards.mcmc_baseline_splines(
+        initial_data,
+        base_haz_spl,
+        20_000,
+        steps,
+        opt_vals
+    )
+    
+    n_burn = 1000
+    lag,acf_vals = FatigueHazards.find_lag(
+        samples.gamma,
+        samples.beta,
+        n_burn;
+        target=0.05,
+        grid_size=2000,
+        results=true
     )
 
+    n_target = 1200
+    max_size = 10_000
+
+    @time bulk_samples = FatigueHazards.bulk_mcmc_baseline_splines(
+        initial_data,
+        base_haz_spl,
+        n_target,
+        steps,
+        opt_vals,
+        n_burn,
+        lag;
+        length_lim=max_size,
+        multithread=true
+    )
+end
 #opt_vals = 0.5 * ones(base_haz_spl.params.num_basis + risk_spl.params.num_basis)
 
 #test_steps = FatigueHazards.StepSize(
@@ -141,6 +193,14 @@ samples = FatigueHazards.mcmc_risk_splines(
     20_000,
     steps,
     s_map,
+    opt_vals
+)
+
+samples = FatigueHazards.mcmc_baseline_splines(
+    initial_data,
+    base_haz_spl,
+    20_000,
+    steps,
     opt_vals
 )
 
@@ -254,9 +314,19 @@ let
     if minimum(t_samples) == 0.0
         #t_samples .+= sqrt(eps(Float64))
     end
-    p = plot(left_margin=20Plots.mm,
-        bottom_margin=20Plots.mm,
-        size=(1400,1000)
+
+    truth_failure_time = Vector{Float64}(undef,length(stress_design))
+    for i in eachindex(stress_design)
+        truth_failure_time[i] = FatigueHazards.bilinear_sn(
+            mat,
+            stress_design[i] * initial_data.s_max
+        )
+    end
+
+    p = plot(
+        #left_margin=20Plots.mm,
+        #bottom_margin=20Plots.mm,
+        #size=(1400,1000)
     )
     #xlabel!("test")
     errorline!(
@@ -266,9 +336,13 @@ let
         #xaxis=:log,
         #yaxis=:log
     )
+    #plot!(
+    #    [log(10,s_min),log(10,s_max)],
+    #    [log(10,n_max),log(10,n_min)]
+    #)
     plot!(
-        [log(10,s_min),log(10,s_max)],
-        [log(10,n_max),log(10,n_min)]
+        log.(10,stress_design .* initial_data.s_max),
+        log.(10,truth_failure_time)
     )
 end
 #n_rep = Int(floor((n_target / yielded_iid) * (single_n / max_size)))
