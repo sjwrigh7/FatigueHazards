@@ -269,7 +269,7 @@ function auto_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
     beta_iter_acc = Vector{Bool}(undef,batchsize)
     gamma_iter_acc = Array{Bool}(undef,batchsize,splines.params.num_basis)
 
-
+    iter_init = copy(init_vals)
     @inbounds @showprogress 1 "Computing Stepsize..." for i in 1:nbatch
         weight = sqrt(i)
         start = (i-1)*batchsize + 1 #+ ifelse(i==1,1,0)
@@ -286,9 +286,14 @@ function auto_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
             splines,
             batchsize,
             stepsize,
-            init_vals
+            iter_init
         )
         
+        iter_init .= vcat(
+            beta_iter[end],
+            gamma_iter[end,:]
+        )
+
         beta_main[start:stop] .= beta_iter
         gamma_main[start:stop,:] .= gamma_iter
         beta_main_acc[start:stop] .= beta_iter_acc
@@ -314,7 +319,7 @@ function auto_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
             stepsize_hist[1:i,:],splines,target,scale,shape,offset,
             weight)
     end
-    return stepsize,stepsize_hist,acceptance_hist
+    return stepsize,stepsize_hist,acceptance_hist,iter_init
 end
 
 """
@@ -382,7 +387,7 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
     beta_iter_acc = Array{Bool}(undef,batchsize,n_risk)
     gamma_iter_acc = Array{Bool}(undef,batchsize,n_base)
 
-
+    iter_init = copy(init_vals)
     @inbounds @showprogress 1 "Computing Stepsize..." for i in 1:nbatch
         weight = sqrt(i)
         start = (i-1)*batchsize + 1 #+ ifelse(i==1,1,0)
@@ -401,7 +406,12 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
             batchsize,
             stepsize,
             s_map,
-            init_vals
+            iter_init
+        )
+
+        iter_init .= vcat(
+            beta_iter[end,:],
+            gamma_iter[end,:]
         )
         
         beta_main[start:stop,:] .= beta_iter
@@ -431,7 +441,7 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
             stepsize_hist[1:i,:],base_haz_splines,risk_splines,
             target,scale,shape,offset,weight)
     end
-    return stepsize,stepsize_hist,acceptance_hist
+    return stepsize,stepsize_hist,acceptance_hist,iter_init,beta_main,gamma_main
 end
 
 """
@@ -765,7 +775,7 @@ function find_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
     #    theta_init = repeat([theta_init],ntheta)
     #end
 
-    stepsize,stepsize_hist,acceptance_hist = auto_stepsize(
+    stepsize,stepsize_hist,acceptance_hist,new_init = auto_stepsize(
         data,
         splines,
         nbatch,
@@ -780,7 +790,7 @@ function find_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
 
     make_plots ? plot_stepsize_opt(stepsize_hist,acceptance_hist,splines,show_plots,save_plots,mdl_apnd) : nothing
 
-    return stepsize
+    return stepsize,new_init
 end
 
 """
@@ -837,7 +847,7 @@ function find_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
     #    theta_init = repeat([theta_init],ntheta)
     #end
 
-    stepsize,stepsize_hist,acceptance_hist = auto_stepsize(
+    stepsize,stepsize_hist,acceptance_hist,new_init,beta_main,gamma_main = auto_stepsize(
         data,
         base_haz_splines,
         risk_splines,
@@ -857,5 +867,5 @@ function find_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
     println(size(acceptance_hist))
     make_plots ? plot_stepsize_opt(stepsize_hist,acceptance_hist,base_haz_splines,risk_splines,show_plots,save_plots,mdl_apnd) : nothing
 
-    return stepsize
+    return stepsize,new_init,beta_main,gamma_main
 end
