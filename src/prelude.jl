@@ -1,57 +1,76 @@
 function init(data::StepStressData,spline_order,n_int;risk=:linear)
-    interior_knots_grid = collect(
-        range(
-            start = data.t_norm[2],
-            stop = data.t_norm[end-1],
-            length = n_int + 2
+    #interior_knots_grid = collect(
+    #    range(
+    #        start = data.t_norm[2],
+    #        stop = data.t_norm[end-1],
+    #        length = n_int + 2
+    #    )
+    #)
+    #interior_knots = interior_knots_grid[2:(end-1)]
+    idx_points = Int.(
+        floor.(
+            collect(
+                range(
+                    start = 1,
+                    stop = length(data.t_norm) - 1,
+                    length = n_int + 2
+                )
+            )
         )
-    )
-    interior_knots = interior_knots_grid[2:(end-1)]
+    )[2:(end-1)]
+
+    lower_vals = data.t_norm[idx_points]
+    upper_vals = data.t_norm[idx_points .+ 1]
+
+    interior_knots = 0.5 .* (lower_vals .+ upper_vals)
 
 
     base_haz_splines = generate_splines(spline_order,interior_knots,data.t_norm[1:(end-1)])
-    if risk == :linear
-        return base_haz_splines
-    elseif risk == :splines
-        interior_knots_grid = collect(
-            range(
-                start = minimum(data.s_norm),
-                stop = maximum(data.s_norm),
-                length = n_int + 2
-            )
-        )
 
-        interior_knots = interior_knots_grid[2:(end-1)]
-
-        risk_splines = generate_splines(spline_order,interior_knots,sort(unique(data.s_norm)))
-        return base_haz_splines,risk_splines
-    end
+    return base_haz_splines
 end
 
 function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spline_order,risk_n_int)
-    base_haz_interior_knots_grid = collect(
-        range(
-            start = data.t_norm[2],
-            stop = data.t_norm[end-1],
-            length = base_haz_n_int + 2
+    base_haz_idx_points = Int.(
+        floor.(
+            collect(
+                range(
+                    start = 1,
+                    stop = length(data.t_norm) - 1,
+                    length = base_haz_n_int + 2
+                )
+            )
         )
-    )
-    base_haz_interior_knots = base_haz_interior_knots_grid[2:(end-1)]
+    )[2:(end-1)]
 
+    base_haz_lower_vals = data.t_norm[base_haz_idx_points]
+    base_haz_upper_vals = data.t_norm[base_haz_idx_points .+ 1]
+
+    base_haz_interior_knots = 0.5 .* (base_haz_lower_vals .+ base_haz_upper_vals)
 
     base_haz_splines = generate_splines(base_haz_spline_order,base_haz_interior_knots,data.t_norm[1:(end-1)])
 
-    risk_interior_knots_grid = collect(
-        range(
-            start = minimum(data.s_norm),
-            stop = maximum(data.s_norm),
-            length = risk_n_int + 2
+    s_unique = sort(unique(data.s_norm))
+
+    risk_idx_points = Int.(
+        floor.(
+            collect(
+                range(
+                    start = 1,
+                    stop = length(s_unique) - 1,
+                    length = risk_n_int + 2
+                )
+            )
         )
-    )
+    )[2:(end-1)]
 
-    risk_interior_knots = risk_interior_knots_grid[2:(end-1)]
+    risk_lower_vals = s_unique[risk_idx_points]
+    risk_upper_vals = s_unique[risk_idx_points .+ 1]
 
-    risk_splines = generate_splines(risk_spline_order,risk_interior_knots,sort(unique(data.s_norm)))
+    risk_interior_knots = 0.5 .* (risk_lower_vals .+ risk_upper_vals)
+
+
+    risk_splines = generate_splines(risk_spline_order,risk_interior_knots,s_unique)
     return base_haz_splines,risk_splines
 end
 
