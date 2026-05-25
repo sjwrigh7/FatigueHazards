@@ -20,11 +20,30 @@ function init_opt_design(s_min=1e3,s_max=2e4,ds_min=-1e4,ds_max=1e4,n_min=1e3,n_
     return design
 end
 
+function lhc_sampler(plan)
+    design = Array{Float64}(undef,size(plan))
+    n_breaks = size(plan,1) + 1
+    bin_vals = range(
+        start = 0.0,
+        stop = 1.0,
+        length = n_breaks
+    )
+    @inbounds for j in axes(plan,2)
+        @inbounds for i in axes(plan,1)
+            bin_num = plan[i,j]
+            unif_range = Uniform(bin_vals[bin_num],bin_vals[bin_num + 1])
+            rand_val = rand(unif_range)
+            design[i,j] = rand_val
+        end
+    end
+    return design
+end
+
 function init_data(
     design::OptDesign,
     samples::PosteriorIID,
     data::StepStressData,
-    splines::Splines;
+    base_haz_splines::Splines;
     n_init=30,
     n_rep=7,
     n_inner=2500,
@@ -36,13 +55,14 @@ function init_data(
         (design.ds_min,design.ds_max),
         (design.n_min,design.n_max)
     ]
-    doe = LHCoptim(n_init,3,100)
-    doe = scaleLHC(doe[1],doe_bounds)
+    doe_init = LHCoptim(n_init,3,20)
+    doe_norm = lhc_sampler(doe_init[1])
+    doe = scaleLHC(doe_norm,doe_bounds)
 
     lower_bounds = [p[1] for p in doe_bounds]
     upper_bounds = [p[2] for p in doe_bounds]
 
-    doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
+    #doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
 
     doe_resp = Array{Float64}(undef,n_init,n_rep)
 
@@ -58,7 +78,7 @@ function init_data(
                 temp_design,
                 data,
                 samples,
-                splines.params.design,
+                base_haz_splines,
                 n_outer,
                 n_inner,
                 results=:scalar
@@ -75,7 +95,7 @@ function init_data(
     design::OptDesignReduced,
     samples::PosteriorIID,
     data::StepStressData,
-    splines::Splines;
+    base_haz_splines::Splines;
     n_init=15,
     n_rep=7,
     n_inner=2500,
@@ -86,13 +106,14 @@ function init_data(
         (design.s_min,design.s_max),
         (design.ds_min,design.ds_max),
     ]
-    doe = LHCoptim(n_init,2,100)
-    doe = scaleLHC(doe[1],doe_bounds)
+    doe_init = LHCoptim(n_init,2,20)
+    doe_norm = lhc_sampler(doe_init[1])
+    doe = scaleLHC(doe_norm,doe_bounds)
 
     lower_bounds = [p[1] for p in doe_bounds]
     upper_bounds = [p[2] for p in doe_bounds]
 
-    doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
+    #doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
 
     doe_resp = Array{Float64}(undef,n_init,n_rep)
 
@@ -107,7 +128,7 @@ function init_data(
                 temp_design,
                 data,
                 samples,
-                splines.params.design,
+                base_haz_splines,
                 n_outer,
                 n_inner,
                 results=:scalar
@@ -123,7 +144,7 @@ end
 function optimize_design(
     samples::PosteriorIID,
     data::StepStressData,
-    splines::Splines,
+    base_haz_splines::Splines,
     n_opt::Int;
     s_min=1e3,
     s_max=2e4,
@@ -134,7 +155,7 @@ function optimize_design(
     n_const=5e3,
     reduce=false,
     n_init=0,
-    n_rep=7,
+    n_rep=3,
     n_use=3,
     n_inner=2500,
     n_outer=2500,
@@ -167,7 +188,7 @@ function optimize_design(
         design,
         samples,
         data,
-        splines;
+        base_haz_splines;
         n_init=n_init,
         n_rep=n_rep,
         n_inner=n_inner,
@@ -205,9 +226,13 @@ function optimize_design(
     )
 
     for i in 1:n_use
-        println("Initial DOE Shannon entropy = ")
-        println(vec(sort(doe_resp,dims=2)[:,i]))
-        append!(mdl,permutedims(doe_norm),vec(sort(doe_resp,dims=2,rev=true)[:,i]))
+        #println("Initial DOE Shannon entropy = ")
+        #println(vec(sort(doe_resp,dims=2)[:,i]))
+        append!(
+            mdl,
+            permutedims(doe_norm),
+            vec(sort(doe_resp,dims=2,rev=true)[:,i])
+        )
     end
 
     try
@@ -216,28 +241,36 @@ function optimize_design(
         ess(mdl;nIter=n_mcmc)
     end
 
-    function objective(theta)
+    function objective_max_upper_ci(theta)
         mdl_out = predict_f(mdl,permutedims(theta'))
         upper_CI = mdl_out[1][1] + 1.645 * mdl_out[2][1]
         return -upper_CI
     end
 
+    function objective_max_expected_improvement(theta)
+        mdl_out = predict_f(mdl,permutedims(theta'))
+        mu = mdl_out[1][1]
+        sig = sqrt(mdl_out[2][1])
+
+        ei = (mu - curr_max) * 
+            cdf(Normal(mu,sig),curr_max) +
+            sig * 
+            pdf(Normal(mu,sig),curr_max)
+        return -ei
+    end
+
     temp_ent = Vector{Float64}(undef,n_rep)
 
-    for i in 1:n_opt
-        try
-            println("Model variance = ",mdl.kernel.σ2)
-            println("Model noise = ",mdl.noise)
-        catch
-        end
+    @showprogress "Running Bayesian optimization..." for i in 1:n_opt
+        curr_max,_ = findmax(mdl.y)
         opt_res = bboptimize(
-            objective;
+            objective_max_expected_improvement;
             SearchRange = opt_bounds,
             PopulationSize=pop_size,
             MaxTime=max_time,
+            TraceMode = :silent
         )
         norm_vals = best_candidate(opt_res)
-        println("Normalized optimum = [$(norm_vals[1]),$(norm_vals[2])]")
         scaled_vals = norm_vals .* (upper_bounds .- lower_bounds) .+ lower_bounds
 
         if length(lower_bounds) == 2
@@ -254,12 +287,12 @@ function optimize_design(
             )
         end
 
-        @showprogress "Solving initial design..." for j in 1:n_rep
+        for j in 1:n_rep
             ent_val = eval_entropy(
                 temp_design,
                 data,
                 samples,
-                splines.params.design,
+                base_haz_splines,
                 n_outer,
                 n_inner,
                 results=:scalar
@@ -269,14 +302,415 @@ function optimize_design(
         end
 
         for j in 1:n_use
-            println("Optim point new entropy = $(temp_ent[j])")
-            append!(mdl,permutedims(norm_vals'),[sort(temp_ent,rev=true)[j]])
+            append!(
+                mdl,
+                permutedims(norm_vals'),
+                [sort(temp_ent,rev=true)[j]]
+            )
         end
 
         #append!(mdl,permutedims(norm_vals'),[mdl_eval])
-        println("Appended data = [$(mdl.x[1,end]),$(mdl.x[2,end])]")
+        #println("Appended data = [$(mdl.x[1,end]),$(mdl.x[2,end])]")
 
         #ess(mdl;nIter=n_mcmc,noise=true)
+        try
+            optimize!(mdl)
+        catch
+            ess(mdl,nIter=n_mcmc)
+        end
+    end
+
+    validation_doe_init = LHCoptim(4,3,20)
+    validation_doe_norm = lhc_sampler(validation_doe_init[1])
+    validation_resp = Vector{Float64}(undef,size(validation_doe_norm,1))
+    validation_prediction = similar(validation_resp)
+    validation_uncert = similar(validation_resp)
+    for i in axes(validation_doe_norm,1)
+        scaled_vals = validation_doe_norm[i,:] .* (upper_bounds .- lower_bounds) .+ lower_bounds
+
+        if length(lower_bounds) == 2
+            temp_design = StepStressTest(
+                scaled_vals[1],
+                scaled_vals[2],
+                design.n_const
+            )
+        else
+            temp_design = StepStressTest(
+                scaled_vals[1],
+                scaled_vals[2],
+                scaled_vals[3]
+            )
+        end
+        validation_resp[i] = eval_entropy(
+            temp_design,
+            data,
+            samples,
+            base_haz_splines,
+            n_outer,
+            n_inner,
+            results=:scalar
+        )
+        mdl_out = predict_f(mld,permutedims(validation_doe_norm[i,:]'))
+        validation_predict[i] = mdl_out[1][1]
+        validation_uncert[i] = mdl_out[2][1]
+    end
+
+
+    _,best_idx = findmax(mdl.y)
+    best_inp = vec(mdl.x[:,best_idx]) .* (upper_bounds .- lower_bounds) .+ lower_bounds
+    if length(lower_bounds) == 2
+        best_design = StepStressTest(
+            best_inp[1],
+            best_inp[2],
+            design.n_const
+        )
+    else
+        best_design = StepStressTest(
+            best_inp[1],
+            best_inp[2],
+            best_inp[3]
+        )
+    end
+    return best_design,mdl.x,mdl.y,validation_doe_norm,validation_resp,validation_prediction,validation_uncert
+end
+
+function init_data(
+    design::OptDesign,
+    samples::PosteriorIID,
+    data::StepStressData,
+    base_haz_splines::Splines,
+    risk_splines::Splines;
+    n_init=30,
+    n_rep=3,
+    n_inner=2500,
+    n_outer=2500,
+)
+
+    doe_bounds = [
+        (design.s_min,design.s_max),
+        (design.ds_min,design.ds_max),
+        (design.n_min,design.n_max)
+    ]
+    doe_init = LHCoptim(n_init,3,20)
+    doe_norm = lhc_sampler(doe_init[1])
+    doe = scaleLHC(doe_norm,doe_bounds)
+
+    lower_bounds = [p[1] for p in doe_bounds]
+    upper_bounds = [p[2] for p in doe_bounds]
+
+    #doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
+
+    doe_resp = Array{Float64}(undef,n_init,n_rep)
+
+    @showprogress "Solving initial design..." for i in 1:n_init
+        temp_design = StepStressTest(
+            doe[i,1],
+            doe[i,2],
+            doe[i,3]
+        )
+        open("../examples/temp_designs.txt","a") do f
+            println(f,join(string.(doe[i,:]),','))
+        end
+
+        for j in 1:n_rep
+            ent_val = eval_entropy(
+                temp_design,
+                data,
+                samples,
+                base_haz_splines,
+                risk_splines,
+                n_outer,
+                n_inner,
+                results=:scalar
+            )
+
+            doe_resp[i,j] = ent_val
+        end
+    end
+
+    return lower_bounds,upper_bounds,doe_norm,doe_resp
+end
+
+function init_data(
+    design::OptDesignReduced,
+    samples::PosteriorIID,
+    data::StepStressData,
+    base_haz_splines::Splines,
+    risk_splines::Splines;
+    n_init=15,
+    n_rep=3,
+    n_inner=2500,
+    n_outer=2500,
+    multithread=true
+)
+
+    doe_bounds = [
+        (design.s_min,design.s_max),
+        (design.ds_min,design.ds_max),
+    ]
+    doe_init = LHCoptim(n_init,2,20)
+    doe_norm = lhc_sampler(doe_init[1])
+    doe = scaleLHC(doe_norm,doe_bounds)
+
+    lower_bounds = [p[1] for p in doe_bounds]
+    upper_bounds = [p[2] for p in doe_bounds]
+
+    #doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
+
+    doe_resp = Array{Float64}(undef,n_init,n_rep)
+
+    @showprogress "Solving initial design..." for i in 1:n_init
+        temp_design = StepStressTest(
+            doe[i,1],
+            doe[i,2],
+            design.n_const
+        )
+        open("../examples/temp_designs.txt","a") do f
+            println(f,join(string.(doe[i,:]),','))
+        end
+        for j in 1:n_rep
+            ent_val = eval_entropy(
+                temp_design,
+                data,
+                samples,
+                base_haz_splines,
+                risk_splines,
+                n_outer,
+                n_inner;
+                results=:scalar,
+                multithread=multithread,
+                return_times=false
+            )
+
+            doe_resp[i,j] = ent_val
+        end
+    end
+
+    return lower_bounds,upper_bounds,doe_norm,doe_resp
+end
+
+function optimize_design(
+    samples::PosteriorIID,
+    data::StepStressData,
+    base_haz_splines::Splines,
+    risk_splines::Splines,
+    n_opt::Int;
+    s_min=1e3,
+    s_max=2e4,
+    ds_min=-1e4,
+    ds_max=1e4,
+    n_min=1e3,
+    n_max=1e7,
+    n_const=5e3,
+    reduce=false,
+    n_init=0,
+    n_rep=3,
+    n_use=3,
+    n_inner=2500,
+    n_outer=2500,
+    n_mcmc=20000,
+    pop_size=5000,
+    max_time=1.5,
+    multithread=true
+
+)
+    design = init_opt_design(
+        s_min,
+        s_max,
+        ds_min,
+        ds_max,
+        n_min,
+        n_max;
+        reduce=reduce,
+        n_const=n_const
+    )
+
+    if n_init == 0
+        if reduce
+            n_init = 15
+        else
+            n_init = 30
+        end
+    end
+
+    lower_bounds,upper_bounds,doe_norm,doe_resp = init_data(
+        design,
+        samples,
+        data,
+        base_haz_splines,
+        risk_splines;
+        n_init=n_init,
+        n_rep=n_rep,
+        n_inner=n_inner,
+        n_outer=n_outer
+    )
+
+    opt_bounds = [(0.0,1.0) for i in eachindex(lower_bounds)]
+
+    mdl = ElasticGPE(
+        length(opt_bounds),
+        mean = MeanConst(0.5),
+        kernel = SE(repeat([-1.50],length(opt_bounds)),-2.0),
+        logNoise = -3.0,
+        capacity = 3000
+    )
+
+    # set priors for GP
+    set_priors!(
+        mdl.mean,
+        [Normal(0.0,1.0)]
+    )
+    set_priors!(
+        mdl.logNoise,
+        [Normal(-3.0,3.0)]
+    )
+    set_priors!(
+        mdl.kernel,
+        vcat(
+            repeat(
+                [Normal(-1.5,3.0)],
+                length(opt_bounds)
+            ),
+            Normal(0.0,3.0)
+        )
+    )
+
+    for i in 1:n_use
+        append!(
+            mdl,
+            permutedims(doe_norm),
+            vec(sort(doe_resp,dims=2,rev=true)[:,i])
+        )
+    end
+
+    try
+        optimize!(mdl,noise=true)
+    catch
+        ess(mdl;nIter=n_mcmc)
+    end
+
+    function objective_max_upper_ci(theta)
+        mdl_out = predict_f(mdl,permutedims(theta'))
+        upper_CI = mdl_out[1][1] + 1.645 * mdl_out[2][1]
+        return -upper_CI
+    end
+
+    function objective_max_expected_improvement(theta)
+        mdl_out = predict_f(mdl,permutedims(theta'))
+        mu = mdl_out[1][1]
+        sig = sqrt(mdl_out[2][1])
+
+        ei = (mu - curr_max) * 
+            cdf(Normal(mu,sig),curr_max) +
+            sig * 
+            pdf(Normal(mu,sig),curr_max)
+        return -ei
+    end
+
+    curr_max,_ = findmax(mdl.y)
+    temp_ent = Vector{Float64}(undef,n_rep)
+
+    @showprogress "Running Bayesian optimization..." for i in 1:n_opt
+        curr_max = max(curr_max,mdl.y[end])
+        opt_res = bboptimize(
+            objective_max_expected_improvement;
+            SearchRange = opt_bounds,
+            PopulationSize=pop_size,
+            MaxTime=max_time,
+            TraceMode = :silent
+        )
+        norm_vals = best_candidate(opt_res)
+        scaled_vals = norm_vals .* (upper_bounds .- lower_bounds) .+ lower_bounds
+
+        if length(lower_bounds) == 2
+            temp_design = StepStressTest(
+                scaled_vals[1],
+                scaled_vals[2],
+                design.n_const
+            )
+        else
+            temp_design = StepStressTest(
+                scaled_vals[1],
+                scaled_vals[2],
+                scaled_vals[3]
+            )
+        end
+        open("../examples/temp_designs.txt","a") do f
+            println(f,join(string.(scaled_vals),','))
+        end
+
+        temp_ent .= -10.0
+        for j in 1:n_rep
+            ent_val = eval_entropy(
+                temp_design,
+                data,
+                samples,
+                base_haz_splines,
+                risk_splines,
+                n_outer,
+                n_inner;
+                results=:scalar,
+                multithread=multithread,
+                return_times=false
+            )
+
+            temp_ent[j] = ent_val
+        end
+
+        for j in 1:n_use
+            #println("Optim point new entropy = $(sort(temp_ent,rev=true)[j])")
+            append!(
+                mdl,
+                permutedims(norm_vals'),
+                [sort(temp_ent,rev=true)[j]]
+            )
+        end
+
+        #append!(mdl,permutedims(norm_vals'),[mdl_eval])
+        #println("Appended data = [$(mdl.x[1,end]),$(mdl.x[2,end])]")
+
+        #ess(mdl;nIter=n_mcmc,noise=true)
+        try
+            optimize!(mdl)
+        catch
+            ess(mdl,nIter=n_mcmc)
+        end
+    end
+
+    validation_doe_init = LHCoptim(4,length(lower_bounds),20)
+    validation_doe_norm = lhc_sampler(validation_doe_init[1])
+    validation_resp = Vector{Float64}(undef,size(validation_doe_norm,1))
+    validation_predict = similar(validation_resp)
+    validation_uncert = similar(validation_resp)
+    for i in axes(validation_doe_norm,1)
+        scaled_vals = validation_doe_norm[i,:] .* (upper_bounds .- lower_bounds) .+ lower_bounds
+
+        if length(lower_bounds) == 2
+            temp_design = StepStressTest(
+                scaled_vals[1],
+                scaled_vals[2],
+                design.n_const
+            )
+        else
+            temp_design = StepStressTest(
+                scaled_vals[1],
+                scaled_vals[2],
+                scaled_vals[3]
+            )
+        end
+        validation_resp[i] = eval_entropy(
+            temp_design,
+            data,
+            samples,
+            base_haz_splines,
+            risk_splines,
+            n_outer,
+            n_inner,
+            results=:scalar
+        )
+        mdl_out = predict_f(mdl,permutedims(validation_doe_norm[i,:]'))
+        validation_predict[i] = mdl_out[1][1]
+        validation_uncert[i] = mdl_out[2][1]
     end
 
     _,best_idx = findmax(mdl.y)
@@ -294,5 +728,5 @@ function optimize_design(
             best_inp[3]
         )
     end
-    return best_design
+    return best_design,mdl.x,mdl.y,validation_doe_norm,validation_resp,validation_predict,validation_uncert
 end
