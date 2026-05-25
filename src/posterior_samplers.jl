@@ -1,6 +1,13 @@
-# more efficient metropolis function
+"""
+    metropolis_gamma(...)
+CORRECTED implementation of a Metropolis-Hastings update for a single time domain
+spline basis coefficient.
+
+This method is for a survival model using an M-spline risk function
+"""
 function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Array{Float64,2},
-    stresses::Array{Float64,2},J::Int,risk_terms::Vector{Float64},fail_indic::Array{Int,2},step::Float64,j::Int)
+    M_beta::Array{Float64,2},beta::Vector{Float64},fail_idx::Vector{Int},s_map::Array{Int,2},
+    step::Float64,j::Int)
     
     current_gamma = gamma
     proposed_gamma = copy(current_gamma)
@@ -10,11 +17,8 @@ function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Arr
     new_gamma = exp(proposed_transformed)
     proposed_gamma[j] = new_gamma
 
-    #current_lik = log_lik_splines(stresses,delta_i,T,beta,current_gamma,M,I)
-    #proposed_lik = log_lik_splines(stresses,delta_i,T,beta,proposed_gamma,M,I)
-
-    current_lik = log_lik(current_gamma,M,I_diff,J,risk_terms,fail_indic)
-    proposed_lik = log_lik(proposed_gamma,M,I_diff,J,risk_terms,fail_indic)
+    current_lik = log_lik(current_gamma,M,I_diff,M_beta,beta,fail_idx,s_map)
+    proposed_lik = log_lik(proposed_gamma,M,I_diff,M_beta,beta,fail_idx,s_map)
 
     log_jump_current = logpdf(
         Normal(
@@ -54,29 +58,35 @@ function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Arr
     return return_gamma,accept
 end
 
-# more efficient metropolis function
-function metropolis_beta(beta,M,I_diff,stresses,fail_indic,delta_i,J,gamma,step)
-    current_beta = beta
-    current_transformed = log(beta)
+"""
+    metropolis_gamma(...)
+CORRECTED implementation of a Metropolis-Hastings update for a single time domain
+spline basis coefficient.
+
+This method is for a survival model using a linear risk function
+"""
+function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Array{Float64,2},
+    stresses::Array{Float64,2},beta::Float64,fail_idx::Vector{Int},
+    step::Float64,j::Int)
+    
+    current_gamma = gamma
+    proposed_gamma = copy(current_gamma)
+
+    current_transformed = log(gamma[j])
     proposed_transformed = rand(Normal(current_transformed,step))
-    proposed_beta = exp(proposed_transformed)
+    new_gamma = exp(proposed_transformed)
+    proposed_gamma[j] = new_gamma
 
-    #proposed_beta = current_beta + rand(Normal(0.0,step))
-    current_risk = [sum_risk(j,stresses,current_beta,delta_i) for j in 2:(J-1)]
-    proposed_risk = [sum_risk(j,stresses,proposed_beta,delta_i) for j in 2:(J-1)]
+    current_lik = log_lik(current_gamma,M,I_diff,stresses,beta,fail_idx)
+    proposed_lik = log_lik(proposed_gamma,M,I_diff,stresses,beta,fail_idx)
 
-    #current_lik = log_lik_splines(stresses,delta_i,T,current_beta,gamma,M,I)
-    #proposed_lik = log_lik_splines(stresses,delta_i,T,proposed_beta,gamma,M,I)
-
-    current_lik = log_lik(gamma,M,I_diff,J,current_risk,fail_indic)
-    proposed_lik = log_lik(gamma,M,I_diff,J,proposed_risk,fail_indic)
     log_jump_current = logpdf(
         Normal(
             current_transformed,
             step
         ),
         proposed_transformed
-    ) - log(proposed_beta)
+    ) - log(proposed_gamma[j])
     
     log_jump_proposed = logpdf(
         Normal(
@@ -84,7 +94,7 @@ function metropolis_beta(beta,M,I_diff,stresses,fail_indic,delta_i,J,gamma,step)
             step
         ),
         current_transformed
-    ) - log(current_beta)
+    ) - log(current_gamma[j])
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
@@ -100,83 +110,22 @@ function metropolis_beta(beta,M,I_diff,stresses,fail_indic,delta_i,J,gamma,step)
     accept = u <= acceptance_ratio
 
     if accept
-        return_beta = proposed_beta
-        return_risk = proposed_risk
+        return_gamma = proposed_gamma[j]
     else
-        return_beta = current_beta
-        return_risk = current_risk
+        return_gamma = current_gamma[j]
     end
 
-    return return_beta,accept,return_risk
+    return return_gamma,accept
 end
+"""
+    metropolis_beta(...)
+CORRECTED implementation for a Metropolis-Hastings update of a single
+stress domain basis coefficient.
 
-# more efficient metropolis function
-function metropolis_beta!(main_risk::Vector{Float64},off_risk::Vector{Float64},beta::Float64,
-    M::Array{Float64,2},I_diff::Array{Float64,2},stresses::Array{Float64,2},fail_indic::Array{Int,2},
-    in_risk_idx::Vector{Vector{Int}},J::Int,gamma::Vector{Float64},step::Float64)
-
-    current_beta = beta
-    current_transformed = log(beta)
-    proposed_transformed = rand(Normal(current_transformed,step))
-    proposed_beta = exp(proposed_transformed)
-
-    @inbounds for j in eachindex(main_risk)
-        main_risk[j] = sum_risk(j+1,stresses,current_beta,in_risk_idx)
-        off_risk[j] = sum_risk(j+1,stresses,proposed_beta,in_risk_idx)
-    end
-
-    current_lik = log_lik(gamma,M,I_diff,J,main_risk,fail_indic)
-    proposed_lik = log_lik(gamma,M,I_diff,J,off_risk,fail_indic)
-    log_jump_current = logpdf(
-        Normal(
-            current_transformed,
-            step
-        ),
-        proposed_transformed
-    ) - log(proposed_beta)
-    
-    log_jump_proposed = logpdf(
-        Normal(
-            proposed_transformed,
-            step
-        ),
-        current_transformed
-    ) - log(current_beta)
-    
-    log_lik_ratio = proposed_lik - current_lik
-    log_jump_ratio = log_jump_proposed - log_jump_current
-    
-    acceptance_ratio = min(
-        exp(
-            log_lik_ratio + log_jump_ratio
-        ),
-        1.0
-    )
-
-    u = rand(Uniform(0.0,1.0))
-    accept = u <= acceptance_ratio
-
-    if accept
-        return_beta = proposed_beta
-        #return_risk = proposed_risk
-        main_risk[:] .= off_risk
-    else
-        return_beta = current_beta
-        #return_risk = current_risk
-    end
-
-    return return_beta,accept
-end
-
-# more efficient metropolis function
-function metropolis_beta!(main_risk::Vector{Float64},off_risk::Vector{Float64},beta::Vector{Float64},
-    M::Array{Float64,2},I_diff::Array{Float64,2},M_beta::Array{Float64,2},fail_indic::Array{Int,2},
-    in_risk_idx::Vector{Vector{Int}},s_map::Array{Int,2},J::Int,gamma::Vector{Float64},step::Float64,j::Int)
-
-    #current_beta = beta
-    #current_transformed = log(beta)
-    #proposed_transformed = rand(Normal(current_transformed,step))
-    #proposed_beta = exp(proposed_transformed)
+This method is for a survival model using an M-spline risk function.
+"""
+function metropolis_beta(beta::Vector{Float64},M::Array{Float64,2},I_diff::Array{Float64,2},
+    M_beta::Array{Float64,2},fail_idx::Vector{Int},s_map::Array{Int,2},gamma::Vector{Float64},step::Float64,j::Int)
 
     current_beta = beta
     proposed_beta = copy(current_beta)
@@ -185,14 +134,12 @@ function metropolis_beta!(main_risk::Vector{Float64},off_risk::Vector{Float64},b
     proposed_transformed = rand(Normal(current_transformed,step))
     new_beta = exp(proposed_transformed)
     proposed_beta[j] = new_beta
+    #new_beta = rand(Normal(current_beta[j],step))
+    #proposed_beta[j] = new_beta
 
-    @inbounds for k in eachindex(main_risk)
-        main_risk[k] = sum_risk(k+1,M_beta,current_beta,in_risk_idx,s_map)
-        off_risk[k] = sum_risk(k+1,M_beta,proposed_beta,in_risk_idx,s_map)
-    end
-
-    current_lik = log_lik(gamma,M,I_diff,J,main_risk,fail_indic)
-    proposed_lik = log_lik(gamma,M,I_diff,J,off_risk,fail_indic)
+    current_lik = log_lik(gamma,M,I_diff,M_beta,current_beta,fail_idx,s_map)
+    proposed_lik = log_lik(gamma,M,I_diff,M_beta,proposed_beta,fail_idx,s_map)
+    
     log_jump_current = logpdf(
         Normal(
             current_transformed,
@@ -211,6 +158,155 @@ function metropolis_beta!(main_risk::Vector{Float64},off_risk::Vector{Float64},b
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
+    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta[j]) -
+        logpdf(Gamma(1.0,2.0),current_beta[j])
+    acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
+
+    log_u = log(rand(Uniform(0.0,1.0)))
+    accept = log_u <= acceptance_ratio
+
+    if accept
+        return_beta = proposed_beta[j]
+        #return_risk = proposed_risk
+        #main_risk[:,:] .= off_risk
+    else
+        return_beta = current_beta[j]
+        #return_risk = current_risk
+    end
+
+    return return_beta,accept
+end
+
+"""
+    metropolis_beta(...)
+CORRECTED implementation for a Metropolis-Hastings update of the linear
+risk function coefficient.
+
+This method is for a survival model using a linear risk function.
+"""
+function metropolis_beta(beta::Float64,M::Array{Float64,2},I_diff::Array{Float64,2},
+    stresses::Array{Float64,2},fail_idx::Vector{Int},gamma::Vector{Float64},step::Float64)
+
+    current_beta = beta
+    current_transformed = log(beta)
+    proposed_transformed = rand(Normal(current_transformed,step))
+    proposed_beta = exp(proposed_transformed)
+    #proposed_beta = rand(Normal(current_beta,step))
+
+    current_lik = log_lik(gamma,M,I_diff,stresses,current_beta,fail_idx)
+    proposed_lik = log_lik(gamma,M,I_diff,stresses,proposed_beta,fail_idx)
+    
+    log_jump_current = logpdf(
+        Normal(
+            current_transformed,
+            step
+        ),
+        proposed_transformed
+    ) - log(proposed_beta)
+    
+    log_jump_proposed = logpdf(
+        Normal(
+            proposed_transformed,
+            step
+        ),
+        current_transformed
+    ) - log(current_beta)
+    
+    log_lik_ratio = proposed_lik - current_lik
+    log_jump_ratio = log_jump_proposed - log_jump_current
+    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta) -
+        logpdf(Gamma(1.0,2.0),current_beta)
+    acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
+
+    log_u = log(rand(Uniform(0.0,1.0)))
+    accept = log_u <= acceptance_ratio
+
+    if accept
+        return_beta = proposed_beta
+        #return_risk = proposed_risk
+        #main_risk[:,:] .= off_risk
+    else
+        return_beta = current_beta
+        #return_risk = current_risk
+    end
+
+    return return_beta,accept
+end
+
+#############################
+# reformulation of corrected MH steps for performance optimization 
+"""
+    metropolis_gamma(...)
+CORRECTED implementation of a Metropolis-Hastings update for a single time domain
+spline basis coefficient.
+
+This method is for a survival model using an M-spline risk function
+"""
+function metropolis_gamma!(
+    current_gamma::Vector{Float64},proposed_gamma::Vector{Float64},
+    main_I_diff::Vector{Float64},off_I_diff::Vector{Float64},
+    main_I_diff_partial::Array{Float64,2},off_I_diff_partial::Array{Float64},
+    main_M::Vector{Float64},off_M::Vector{Float64},
+    main_M_partial::Array{Float64,2},off_M_partial::Array{Float64,2},
+    base_haz_splines::Splines,
+    inst_risk::Array{Float64,2},risk_sums::Vector{Float64},
+    fail_idx::Vector{Int},step::Float64,idx::Int)
+    
+    #current_gamma = gamma
+    #proposed_gamma = copy(current_gamma)
+
+    proposed_gamma[:] .= current_gamma[:]
+
+    current_transformed = log(current_gamma[idx])
+    proposed_transformed = rand(Normal(current_transformed,step))
+    new_gamma = exp(proposed_transformed)
+    proposed_gamma[idx] = new_gamma
+
+    main_I_diff_partial[:,idx] .= base_haz_splines.I_diff[:,idx] .* current_gamma[idx]
+    off_I_diff_partial[:,idx] .= base_haz_splines.I_diff[:,idx] .* proposed_gamma[idx]
+
+    main_M_partial[:,idx] .= base_haz_splines.M[:,idx] .* current_gamma[idx]
+    off_M_partial[:,idx] .= base_haz_splines.M[:,idx] .* proposed_gamma[idx]
+
+    main_I_diff[:] .= sum(main_I_diff_partial,dims=2)
+    off_I_diff[:] .= sum(off_I_diff_partial,dims=2)
+
+    main_M[:] .= sum(main_M_partial,dims=2)
+    off_M[:] .= sum(off_M_partial,dims=2)
+
+    current_lik = log_lik(
+        main_I_diff,
+        main_M,
+        inst_risk,
+        risk_sums,
+        fail_idx,
+    )
+    proposed_lik = log_lik(
+        off_I_diff,
+        off_M,
+        inst_risk,
+        risk_sums,
+        fail_idx,
+    )
+
+    log_jump_current = logpdf(
+        Normal(
+            current_transformed,
+            step
+        ),
+        proposed_transformed
+    ) - log(proposed_gamma[idx])
+    
+    log_jump_proposed = logpdf(
+        Normal(
+            proposed_transformed,
+            step
+        ),
+        current_transformed
+    ) - log(current_gamma[idx])
+    
+    log_lik_ratio = proposed_lik - current_lik
+    log_jump_ratio = log_jump_proposed - log_jump_current
     
     acceptance_ratio = min(
         exp(
@@ -223,12 +319,225 @@ function metropolis_beta!(main_risk::Vector{Float64},off_risk::Vector{Float64},b
     accept = u <= acceptance_ratio
 
     if accept
-        return_beta = proposed_beta[j]
-        #return_risk = proposed_risk
-        main_risk[:] .= off_risk
+        #return_gamma = proposed_gamma[idx]
+        current_gamma[idx] = proposed_gamma[idx]
+        main_I_diff_partial[:,idx] .= off_I_diff_partial[:,idx]
+        main_I_diff[:] .= off_I_diff[:]
+
+        main_M_partial[:,idx] .= off_M_partial[:,idx]
+        main_M[:] .= off_M[:]
     else
-        return_beta = current_beta[j]
-        #return_risk = current_risk
+        #return_gamma = current_gamma[idx]
+
+        off_I_diff_partial[:,idx] .= main_I_diff_partial[:,idx]
+        off_I_diff[:] .= main_I_diff[:]
+        off_M_partial[:,idx] .= main_M_partial[:,idx]
+        off_M[:] .= main_M[:]
+    end
+
+    return accept
+end
+
+"""
+    metropolis_beta(...)
+CORRECTED implementation for a Metropolis-Hastings update of the linear
+risk function coefficient.
+
+This method is for a survival model using a linear risk function.
+"""
+function metropolis_beta!(
+    current_beta::Vector{Float64},proposed_beta::Vector{Float64},
+    main_M::Vector{Float64},off_M::Vector{Float64},
+    main_M_partial::Array{Float64,2},off_M_partial::Array{Float64,2},
+    main_inst_risk::Array{Float64,2},main_risk_sums::Vector{Float64},
+    off_inst_risk::Array{Float64,2},off_risk_sums::Vector{Float64},
+    risk_splines::Splines,
+    time_I_diff::Vector{Float64},time_M::Vector{Float64},
+    fail_idx::Vector{Int},in_risk_idx::Vector{Vector{Int}},
+    s_map::Array{Int,2},step::Float64,idx::Int)
+
+    #current_beta = beta
+    #proposed_beta = copy(current_beta)
+    proposed_beta[:] .= current_beta
+    #println("Current beta = ",current_beta')
+    #println("Jth beta = ",current_beta[idx])
+    current_transformed = log(current_beta[idx])
+    #println("Current transformed value = ",current_transformed)
+    proposed_transformed = rand(Normal(current_transformed,step))
+    #println("Proposed transformed value = ",proposed_transformed)
+    new_beta = exp(proposed_transformed)
+    #println("Converted back to beta = ",new_beta)
+    proposed_beta[idx] = new_beta
+    #println(proposed_beta[idx])
+
+    #new_beta = rand(Normal(current_beta[idx],step))
+    #proposed_beta[idx] = new_beta
+
+    main_M_partial[:,idx] .= risk_splines.M[:,idx] .* current_beta[idx]
+    off_M_partial[:,idx] .= risk_splines.M[:,idx] .* proposed_beta[idx]
+
+    main_M[:] .= sum(main_M_partial,dims=2)
+    off_M[:] .= sum(off_M_partial,dims=2)
+
+    @inbounds for j in axes(main_inst_risk,2)
+        @inbounds for i in axes(main_inst_risk,1)
+            main_inst_risk[i,j] = exp(main_M[s_map[i,j]])
+            off_inst_risk[i,j] = exp(off_M[s_map[i,j]])
+        end
+    end
+
+    for i in 1:(length(main_risk_sums)-1)#eachindex(main_risk_sums)
+        main_risk_sums[i] = sum(main_inst_risk[i,in_risk_idx[i]])
+        off_risk_sums[i] = sum(off_inst_risk[i,in_risk_idx[i]])
+    end
+
+    current_lik = log_lik(
+        time_I_diff,
+        time_M,
+        main_inst_risk,
+        main_risk_sums,
+        fail_idx
+    )
+    proposed_lik = log_lik(
+        time_I_diff,
+        time_M,
+        off_inst_risk,
+        off_risk_sums,
+        fail_idx
+    )
+    #println(current_transformed)
+    #println(step)
+    #println(proposed_transformed)
+    #println(pdf(Normal(current_transformed,step),proposed_transformed))
+    #println(proposed_beta[idx])
+    #println(current_beta[idx])
+    log_jump_current = logpdf(
+        Normal(
+            current_transformed,
+            step
+        ),
+        proposed_transformed
+    ) - log(proposed_beta[idx])
+    
+    log_jump_proposed = logpdf(
+        Normal(
+            proposed_transformed,
+            step
+        ),
+        current_transformed
+    ) - log(current_beta[idx])
+    
+    log_lik_ratio = proposed_lik - current_lik
+    log_jump_ratio = log_jump_proposed - log_jump_current
+    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta[idx]) -
+        logpdf(Normal(1.0,2.0),current_beta[idx])
+    acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
+
+    log_u = log(rand(Uniform(0.0,1.0)))
+    accept = log_u <= acceptance_ratio
+
+    if accept
+        current_beta[idx] = proposed_beta[idx]
+        main_M_partial[:,idx] .= off_M_partial[:,idx]
+        main_M[:] .= off_M[:]
+        main_inst_risk[:,:] .= off_inst_risk[:,:]
+        main_risk_sums[:] .= off_risk_sums[:]
+    else
+        off_M_partial[:,idx] .= main_M_partial[:,idx]
+        off_M[:] .= main_M[:]
+        off_inst_risk[:,:] .= main_inst_risk[:,:]
+        off_risk_sums[:] .= main_risk_sums[:]
+    end
+
+    return accept
+end
+
+# efficient implementations for linear risk function
+"""
+    metropolis_beta(...)
+CORRECTED implementation for a Metropolis-Hastings update of the linear
+risk function coefficient.
+
+This method is for a survival model using a linear risk function.
+"""
+function metropolis_beta!(
+    current_beta::Float64,
+    main_inst_risk::Array{Float64,2},main_risk_sums::Vector{Float64},
+    off_inst_risk::Array{Float64,2},off_risk_sums::Vector{Float64},
+    time_I_diff::Vector{Float64},time_M::Vector{Float64},
+    fail_idx::Vector{Int},in_risk_idx::Vector{Vector{Int}},
+    stresses::Array{Float64,2},step::Float64)
+
+    current_transformed = log(current_beta)
+    proposed_transformed = rand(Normal(current_transformed,step))
+    new_beta = exp(proposed_transformed)
+    proposed_beta = new_beta
+
+    proposed_beta = rand(Normal(current_beta,step))
+
+
+    @inbounds for j in axes(main_inst_risk,2)
+        @inbounds for i in axes(main_inst_risk,1)
+            main_inst_risk[i,j] = exp(current_beta * stresses[i,j])
+            off_inst_risk[i,j] = exp(proposed_beta * stresses[i,j])
+        end
+    end
+
+    for i in 1:(length(main_risk_sums)-1)#eachindex(main_risk_sums)
+        main_risk_sums[i] = sum(main_inst_risk[i,in_risk_idx[i]])
+        off_risk_sums[i] = sum(off_inst_risk[i,in_risk_idx[i]])
+    end
+
+    current_lik = log_lik(
+        time_I_diff,
+        time_M,
+        main_inst_risk,
+        main_risk_sums,
+        fail_idx
+    )
+    proposed_lik = log_lik(
+        time_I_diff,
+        time_M,
+        off_inst_risk,
+        off_risk_sums,
+        fail_idx
+    )
+    
+    log_jump_current = logpdf(
+        Normal(
+            current_transformed,
+            step
+        ),
+        proposed_transformed
+    ) - log(proposed_beta)
+    
+    log_jump_proposed = logpdf(
+        Normal(
+            proposed_transformed,
+            step
+        ),
+        current_transformed
+    ) - log(current_beta)
+    
+    log_lik_ratio = proposed_lik - current_lik
+    log_jump_ratio = log_jump_proposed - log_jump_current
+    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta) -
+        logpdf(Normal(1.0,2.0),current_beta)
+    acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
+
+    log_u = log(rand(Uniform(0.0,1.0)))
+    accept = log_u <= acceptance_ratio
+
+    if accept
+        return_beta = proposed_beta
+        
+        main_inst_risk[:,:] .= off_inst_risk[:,:]
+        main_risk_sums[:] .= off_risk_sums[:]
+    else
+        return_beta = current_beta
+        
+        off_inst_risk[:,:] .= main_inst_risk[:,:]
+        off_risk_sums[:] .= main_risk_sums[:]
     end
 
     return return_beta,accept
