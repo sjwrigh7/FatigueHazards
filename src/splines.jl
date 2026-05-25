@@ -78,7 +78,22 @@ function generate_knots(k::Int,interior_knots::Vector{Float64},x::Vector{Float64
     end
     for i in 1:k
         t[i] = x[1]
-        t[i+n_splines] = x[end] +  sqrt(eps(Float64))
+        t[i+n_splines] = x[end] + sqrt(eps(Float64))
+    end
+    return t,n_splines
+end
+
+function generate_knots(k::Int,interior_knots::Vector{Float64},x::Vector{Float64},upper_bound::Float64)
+    n_splines = length(interior_knots) + k
+    num_knots = n_splines + k
+    t = Vector{Float64}(undef,num_knots)
+
+    for i in eachindex(interior_knots)
+        t[k+i] = interior_knots[i]
+    end
+    for i in 1:k
+        t[i] = x[1]
+        t[i+n_splines] = upper_bound + sqrt(eps(Float64))
     end
     return t,n_splines
 end
@@ -103,6 +118,8 @@ function eval_i_spline(k::Int,n::Int,t::Vector{Float64},x::Vector{Float64})
         for i in eachindex(x)
             #println("basis = $j")
             #println("T index = $i")
+            #println("Knot grid = $t")
+            #println("Value = $(x[i])")
             i_evals[i,j] = i_spline(k,j,t,x[i])
         end
     end
@@ -125,8 +142,51 @@ function init_splines(spline_order::Int,interior_knots::Vector{Float64},x::Vecto
     return params
 end
 
+function init_splines(spline_order::Int,interior_knots::Vector{Float64},x::Vector{Float64},upper_bound::Float64)
+    design = SplineDesign(
+        spline_order,
+        interior_knots
+    )
+    knot_grid,num_basis = generate_knots(spline_order,interior_knots,x,upper_bound)
+
+    params = SplineParams(
+        design,
+        knot_grid,
+        num_basis
+    )
+
+    return params
+end
+
 function generate_splines(spline_order::Int,interior_knots::Vector{Float64},x::Vector{Float64})
     params = init_splines(spline_order,interior_knots,x)
+
+    M = eval_m_spline(
+        params.design.k,
+        params.num_basis,
+        params.knot_grid,
+        x
+    )
+    I = eval_i_spline(
+        params.design.k,
+        params.num_basis,
+        params.knot_grid,
+        x
+    )
+    I_diff = diff(I,dims=1)
+
+    splines = Splines(
+        params,
+        I,
+        M,
+        I_diff
+    )
+
+    return splines
+end
+
+function generate_splines(spline_order::Int,interior_knots::Vector{Float64},x::Vector{Float64},upper_bound::Float64)
+    params = init_splines(spline_order,interior_knots,x,upper_bound)
 
     M = eval_m_spline(
         params.design.k,
