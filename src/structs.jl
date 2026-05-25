@@ -1,10 +1,26 @@
+abstract type MaterialModel end
 # material models
-struct BilinearMaterial
+struct BilinearMaterial <: MaterialModel
     s_max::Float64
     s_min::Float64
     n_max::Float64
     n_min::Float64
     slope::Float64
+end
+
+abstract type DamageRule end
+
+struct LinearDamage <: DamageRule
+    coeff::Float64
+    intercept::Float64
+    x0::Float64
+end
+
+struct PolynomialDamage <: DamageRule
+    order::Int
+    coeff::Vector{Float64}
+    intercept::Float64
+    x0::Float64
 end
 
 # data synthesis structs
@@ -33,6 +49,7 @@ struct StepStressData
     t_norm::Array{Float64}
     delta_i::Array{Int,2}
     in_risk_idx::Vector{Vector{Int}}
+    fail_idx::Vector{Int}
 end
 
 # mcmc structs
@@ -89,4 +106,9 @@ end
 mutable struct StepSize
     beta::Union{Vector{Float64},Float64}
     gamma::Vector{Float64}
+end
+
+mutable struct TestConstraints
+    s_min::Float64
+    s_max::Float64
 end
