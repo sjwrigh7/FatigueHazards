@@ -11,6 +11,7 @@ import ForwardDiff
 using StatsBase
 using Plots
 using LaTeXStrings
+import ElasticPDMats
 # Write your package code here.
 
 include("structs.jl")
@@ -24,4 +25,6 @@ include("entropy.jl")
 include("prelude.jl")
 include("optimization.jl")
 include("stepsize.jl")
+
+LinearAlgebra.ldiv!(cK::ElasticPDMats.ElasticPDMat,x::AbstractVecOrMat) = ldiv!(cK.chol, x)
 end
