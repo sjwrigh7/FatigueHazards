@@ -1,5 +1,5 @@
 function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true,
+    base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true,
     return_times=false)
 
     if multithread
@@ -7,7 +7,7 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             design,
             data,
             posterior_iid,
-            spline_design,
+            base_haz_splines,
             n_sim_outer,
             n_sim_inner;
             return_times=return_times
@@ -22,7 +22,7 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             design,
             data,
             posterior_iid,
-            spline_design,
+            base_haz_splines,
             n_sim_outer,
             n_sim_inner
         )
@@ -57,7 +57,7 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
 end
 
 function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    base_haz_spline::SplineDesign,risk_spline::SplineDesign,
+    base_haz_splines::Splines,risk_splines::Splines,
     n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true,
     return_times=false)
 
@@ -66,8 +66,8 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             design,
             data,
             posterior_iid,
-            base_haz_spline,
-            risk_spline,
+            base_haz_splines,
+            risk_splines,
             n_sim_outer,
             n_sim_inner;
             return_times=return_times
@@ -78,15 +78,21 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             t_samples = temp[3]
         end
     else
-        log_cond,log_marg = _eval_entropy(
+        temp = _eval_entropy(
             design,
             data,
             posterior_iid,
-            base_haz_spline,
-            risk_spline,
+            base_haz_splines,
+            risk_splines,
             n_sim_outer,
-            n_sim_inner
+            n_sim_inner;
+            return_times=return_times
         )
+        log_cond = temp[1]
+        log_marg = temp[2]
+        if return_times
+            t_samples = temp[3]
+        end
     end
 
 
@@ -118,7 +124,8 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
 end
 
 function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner)
+    init_base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner::Int;
+    return_times=false)
 
     sample_avail = length(posterior_iid.beta)
 
@@ -128,7 +135,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         design.n / data.t_max
     )
 
-    splines,stress_grid,t_grid = init_design(design_norm,spline_design)
+    base_haz_splines,stress_grid,t_grid = init_design(design_norm,init_base_haz_splines)
     #println(t_grid)
 
     if n_sim_outer > sample_avail
@@ -173,7 +180,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         #println(r_gamma[i,:])
         t,k = sample_t(
             gamma_outer[i,:],
-            splines,
+            base_haz_splines,
             risk_terms,
             t_grid,
             1e-6
@@ -191,16 +198,16 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         ks
     )
 
-    update_x!(splines,combined_time)
+    update_x!(base_haz_splines,combined_time)
     ####################
     # try precomputing all vals
     risk_outer = [exp.(combined_stress * beta_outer[i]) for i in eachindex(beta_outer)]
-    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
-    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    I_diff_outer = [base_haz_splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [base_haz_splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
 
     risk_inner = [exp.(combined_stress * beta_inner[j]) for j in eachindex(beta_inner)]
-    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
-    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    I_diff_inner = [base_haz_splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [base_haz_splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
     ####################
 
     log_cond = Vector{Float64}(undef,n_sim_outer)
@@ -240,12 +247,16 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
             )
         end
     end
-
-    return log_cond,log_marg
+    if return_times
+        return log_cond,log_marg,t_samples
+    else
+        return log_cond,log_marg
+    end
 end
 
 function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    base_haz_spline::SplineDesign,risk_spline::SplineDesign,n_sim_outer::Int,n_sim_inner)
+    init_base_haz_splines::Splines,init_risk_splines::Splines,n_sim_outer::Int,n_sim_inner::Int;
+    return_times=false)
 
     sample_avail = size(posterior_iid.beta,1)
 
@@ -255,7 +266,7 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         design.n / data.t_max
     )
 
-    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(design_norm,base_haz_spline,risk_spline)
+    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(design_norm,init_base_haz_splines,init_risk_splines)
     #println(t_grid)
 
     if n_sim_outer > sample_avail
@@ -324,12 +335,12 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
     ####################
     # try precomputing all vals
     risk_outer = [exp.(risk_splines.M * beta_outer[i,:]) for i in axes(beta_outer,1)]
-    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
-    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    I_diff_outer = [base_haz_splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [base_haz_splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
 
     risk_inner = [exp.(risk_splines.M * beta_inner[j,:]) for j in axes(beta_inner,1)]
-    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
-    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    I_diff_inner = [base_haz_splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [base_haz_splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
     ####################
 
     log_cond = Vector{Float64}(undef,n_sim_outer)
@@ -357,12 +368,15 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
             )
         end
     end
-
-    return log_cond,log_marg
+    if return_times
+        return log_cond,log_marg,t_samples
+    else
+        return log_cond,log_marg
+    end
 end
 
 function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    spline_design::SplineDesign,n_sim_outer::Int,n_sim_inner;
+    init_base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner;
     return_times=false)
 
     sample_avail = length(posterior_iid.beta)
@@ -373,7 +387,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         design.n / data.t_max
     )
 
-    splines,stress_grid,t_grid = init_design(design_norm,spline_design)
+    base_haz_splines,stress_grid,t_grid = init_design(design_norm,init_base_haz_splines)
     #println(t_grid)
 
     if n_sim_outer > sample_avail
@@ -418,7 +432,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         #println(r_gamma[i,:])
         t,k = sample_t(
             gamma_outer[i,:],
-            splines,
+            base_haz_splines,
             risk_terms,
             t_grid,
             1e-6
@@ -434,16 +448,16 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         ks
     )
 
-    update_x!(splines,combined_time)
+    update_x!(base_haz_splines,combined_time)
     ####################
     # try precomputing all vals
     risk_outer = [exp.(combined_stress * beta_outer[i]) for i in eachindex(beta_outer)]
-    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
-    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    I_diff_outer = [base_haz_splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [base_haz_splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
 
     risk_inner = [exp.(combined_stress * beta_inner[j]) for j in eachindex(beta_inner)]
-    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
-    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    I_diff_inner = [base_haz_splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [base_haz_splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
     ####################
 
     log_cond = Vector{Float64}(undef,n_sim_outer)
@@ -471,7 +485,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
 
     #thread_id_map = Dict([thread_ids[i] => i for i in eachindex(thread_ids)])
     #println(thread_id_map)
-    @inbounds Threads.@threads for i in 1:n_sim_outer
+    @inbounds for i in 1:n_sim_outer
         log_cond[i] = log_density!(
             mul_blank_iter[1],
             combined_time,
@@ -481,7 +495,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
             time_grid_idx[i]
         )
         #log_marg_inner = 0.0
-        @inbounds for j in 1:n_sim_inner
+        @inbounds Threads.@threads for j in 1:n_sim_inner
             log_marg[j,i] = log_density!(
                 mul_blank_iter[Threads.threadid() - Threads.nthreads(:interactive)],
                 combined_time,
@@ -501,7 +515,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
 end
 
 function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    base_haz_spline::SplineDesign,risk_spline::SplineDesign,n_sim_outer::Int,n_sim_inner;
+    init_base_haz_splines::Splines,init_risk_splines::Splines,n_sim_outer::Int,n_sim_inner;
     return_times=false)
 
     sample_avail = size(posterior_iid.beta,1)
@@ -512,7 +526,11 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         design.n / data.t_max
     )
 
-    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(design_norm,base_haz_spline,risk_spline)
+    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(
+        design_norm,
+        init_base_haz_splines,
+        init_risk_splines
+    )
     #println(t_grid)
 
     if n_sim_outer > sample_avail
@@ -573,26 +591,26 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         t_samples,
         ks
     )
-    println(typeof(combined_stress))
-    println(size(combined_stress))
+    #println(typeof(combined_stress))
+    #println(size(combined_stress))
     update_x!(base_haz_splines,combined_time)
     update_x!(risk_splines,combined_stress)
     ####################
     # try precomputing all vals
     risk_outer = [exp.(risk_splines.M * beta_outer[i,:]) for i in axes(beta_outer,1)]
-    I_diff_outer = [splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
-    M_outer = [splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    I_diff_outer = [base_haz_splines.I_diff * gamma_outer[i,:] for i in axes(gamma_outer,1)]
+    M_outer = [base_haz_splines.M * gamma_outer[i,:] for i in axes(gamma_outer,1)]
 
     risk_inner = [exp.(risk_splines.M * beta_inner[j,:]) for j in axes(beta_inner,1)]
-    I_diff_inner = [splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
-    M_inner  = [splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    I_diff_inner = [base_haz_splines.I_diff * gamma_inner[j,:] for j in axes(gamma_inner,1)]
+    M_inner  = [base_haz_splines.M * gamma_inner[j,:] for j in axes(gamma_inner,1)]
     ####################
 
     log_cond = Vector{Float64}(undef,n_sim_outer)
     log_marg = Array{Float64}(undef,n_sim_inner,n_sim_outer)
     mul_blank_iter = [Vector{Float64}(undef,maximum(time_grid_idx)) for _ in 1:Threads.nthreads(:default)]
 
-    @inbounds Threads.@threads for i in 1:n_sim_outer
+    @inbounds for i in 1:n_sim_outer
         log_cond[i] = log_density!(
             mul_blank_iter[1],
             combined_time,
@@ -602,7 +620,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
             time_grid_idx[i]
         )
         #log_marg_inner = 0.0
-        @inbounds for j in 1:n_sim_inner
+        @inbounds Threads.@threads for j in 1:n_sim_inner
             log_marg[j,i] = log_density!(
                 mul_blank_iter[Threads.threadid() - Threads.nthreads(:interactive)],
                 combined_time,
