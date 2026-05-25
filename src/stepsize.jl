@@ -53,10 +53,10 @@ Positional arguments
 * `weight::Float64` weight to use for the weighted average.
 """
 function update_stepsize!(acceptance::Vector{Float64},stepsize::StepSize,
-    history::Array{Float64},splines::Splines,target::Vector{Float64},
+    history::Array{Float64},base_haz_splines::Splines,target::Vector{Float64},
     scale::Float64,shape::Float64,offset::Float64,weight::Float64)
 
-    @inbounds for i in 1:splines.params.num_basis
+    @inbounds for i in 1:base_haz_splines.params.num_basis
         rate = acceptance[i]
 
         diff = rate - target[1]
@@ -130,6 +130,7 @@ function update_stepsize!(acceptance::Vector{Float64},stepsize::StepSize,
         diff = rate - target[1]
 
         adjustment = stepsize_adjust(diff,scale,shape,offset)
+        #=
         stepsize.gamma[i] = weighted_avg(
             history[1:(end-1),i],
             history[end,i],
@@ -142,7 +143,13 @@ function update_stepsize!(acceptance::Vector{Float64},stepsize::StepSize,
             ),
             stepsize.gamma[i]*adjustment,
             weight
+        =#
+        tmp = weighted_avg(
+            history[1:(end-1),i],
+            stepsize.gamma[i],
+            weight
         )
+        stepsize.gamma[i] = min(tmp * adjustment,1.5)
 
     end
 
@@ -152,6 +159,7 @@ function update_stepsize!(acceptance::Vector{Float64},stepsize::StepSize,
         diff = rate - target[2]
 
         adjustment = stepsize_adjust(diff,scale,shape,offset)
+        #=
         stepsize.beta[i] = weighted_avg(
             history[1:(end-1),i + n_base],
             history[end,i + n_base],
@@ -165,6 +173,13 @@ function update_stepsize!(acceptance::Vector{Float64},stepsize::StepSize,
             stepsize.beta[i]*adjustment,
             weight
         )
+        =#
+        tmp = weighted_avg(
+            history[1:(end-1),i+n_base],
+            stepsize.beta[i],
+            weight
+        )
+        stepsize.beta[i] = min(tmp * adjustment,1.5)
 
     end
 
@@ -245,45 +260,82 @@ After each batch, the algorithm calculates the average acceptance rate of all M-
 This value is passed to `update_stepsize` to calculate the proposed adjustment to the step size for the next batch.
 The step size for the next batch is then calculated as the average of all previous step sizes and the value calculated from `update_stepsize`.
 """
-function auto_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsize::Int,
+function auto_stepsize(data::StepStressData,base_haz_splines::Splines,nbatch::Int,batchsize::Int,
     init_vals::Vector{Float64},init::Float64,target::Vector{Float64},
     scale::Float64,shape::Float64,offset::Float64)
 
-    stepsize = StepSize(init,repeat([init],splines.params.num_basis))
+    stepsize = StepSize(
+        init,
+        repeat(
+            [init],
+            base_haz_splines.params.num_basis
+        )
+    )
     
     total_length = batchsize*nbatch
 
-    stepsize_hist = Array{Float64}(undef,nbatch,splines.params.num_basis+1)
-    acceptance_hist = Array{Float64}(undef,nbatch,splines.params.num_basis+1)
+    stepsize_hist = Array{Float64}(undef,nbatch,base_haz_splines.params.num_basis+1)
+    acceptance_hist = Array{Float64}(undef,nbatch,base_haz_splines.params.num_basis+1)
 
 
     beta_main = Vector{Float64}(undef,total_length)
-    gamma_main = Array{Float64}(undef,total_length,splines.params.num_basis)
+    gamma_main = Array{Float64}(undef,total_length,base_haz_splines.params.num_basis)
     main_risk = Vector{Float64}(undef,length(data.t_norm)-2)
     off_risk = Vector{Float64}(undef,length(data.t_norm)-2)
     beta_main_acc = Vector{Bool}(undef,total_length)
-    gamma_main_acc = Array{Bool}(undef,total_length,splines.params.num_basis)
+    gamma_main_acc = Array{Bool}(undef,total_length,base_haz_splines.params.num_basis)
 
     beta_iter = Vector{Float64}(undef,batchsize)
-    gamma_iter = Array{Float64}(undef,batchsize,splines.params.num_basis)
+    gamma_iter = Array{Float64}(undef,batchsize,base_haz_splines.params.num_basis)
     beta_iter_acc = Vector{Bool}(undef,batchsize)
-    gamma_iter_acc = Array{Bool}(undef,batchsize,splines.params.num_basis)
+    gamma_iter_acc = Array{Bool}(undef,batchsize,base_haz_splines.params.num_basis)
+
+    beta = init_vals[1]
+    gamma = init_vals[2:end]
+
+    main_time_I_diff_partial = base_haz_splines.I_diff .* gamma'
+    off_time_I_diff_partial = base_haz_splines.I_diff .* gamma'
+
+    main_time_I_diff = vec(sum(main_time_I_diff_partial,dims=2))
+    off_time_I_diff = vec(sum(off_time_I_diff_partial,dims=2))
+
+    main_time_M_partial = base_haz_splines.M .* gamma'
+    off_time_M_partial = base_haz_splines.M .* gamma'
+
+    main_time_M = vec(sum(main_time_M_partial,dims=2))
+    off_time_M = vec(sum(off_time_M_partial,dims=2))
+
+    main_inst_risk = Array{Float64}(undef,size(data.s_norm))
+    off_inst_risk = similar(main_inst_risk)
+
+    main_risk_sums = Vector{Float64}(undef,size(main_inst_risk,1))
+    off_risk_sums = similar(main_risk_sums)
 
     iter_init = copy(init_vals)
     @inbounds @showprogress 1 "Computing Stepsize..." for i in 1:nbatch
-        weight = sqrt(i)
+        weight = i ^ (0.8)
         start = (i-1)*batchsize + 1 #+ ifelse(i==1,1,0)
         stop = i*batchsize
 
-        mcmc_baseline_splines!(
+        temp_res = mcmc_linear_risk!(
             beta_iter,
             gamma_iter,
-            main_risk,
-            off_risk,
             beta_iter_acc,
             gamma_iter_acc,
+            main_time_I_diff,
+            off_time_I_diff,
+            main_time_I_diff_partial,
+            off_time_I_diff_partial,
+            main_time_M,
+            off_time_M,
+            main_time_M_partial,
+            off_time_M_partial,
+            main_inst_risk,
+            off_inst_risk,
+            main_risk_sums,
+            off_risk_sums,
             data,
-            splines,
+            base_haz_splines,
             batchsize,
             stepsize,
             iter_init
@@ -299,7 +351,7 @@ function auto_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
         beta_main_acc[start:stop] .= beta_iter_acc
         gamma_main_acc[start:stop,:] .= gamma_iter_acc
 
-        @inbounds for j in 1:splines.params.num_basis
+        @inbounds for j in 1:base_haz_splines.params.num_basis
             stepsize_hist[i,j] = stepsize.gamma[j]
             acceptance_hist[i,j] = weighted_avg(
                 gamma_main_acc[1:(start-1),j],
@@ -316,7 +368,7 @@ function auto_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
         )
 
         stepsize = update_stepsize!(acceptance_hist[i,:],stepsize,
-            stepsize_hist[1:i,:],splines,target,scale,shape,offset,
+            stepsize_hist[1:i,:],base_haz_splines,target,scale,shape,offset,
             weight)
     end
     return stepsize,stepsize_hist,acceptance_hist,iter_init
@@ -359,15 +411,25 @@ This value is passed to `update_stepsize` to calculate the proposed adjustment t
 The step size for the next batch is then calculated as the average of all previous step sizes and the value calculated from `update_stepsize`.
 """
 function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splines::Splines,nbatch::Int,
-    batchsize::Int,init_vals::Vector{Float64},init::Float64,target::Vector{Float64},
+    batchsize::Int,init_vals::Vector{Float64},init,target::Vector{Float64},
     scale::Float64,shape::Float64,offset::Float64,s_map::Array{Int,2})
 
     n_base = base_haz_splines.params.num_basis
     n_risk = risk_splines.params.num_basis
+
+    beta = init_vals[1:n_risk]
+    gamma = init_vals[(n_risk + 1):end]
+
     stepsize = StepSize(
         repeat([init],n_risk),
         repeat([init],n_base)
     )
+    if typeof(init) == "StepSize"
+        stepsize = StepSize(
+            init.beta,
+            init.gamma
+        )
+    end
     
     total_length = batchsize*nbatch
 
@@ -377,8 +439,7 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
 
     beta_main = Array{Float64}(undef,total_length,n_risk)
     gamma_main = Array{Float64}(undef,total_length,n_base)
-    main_risk = Vector{Float64}(undef,length(data.t_norm)-2)
-    off_risk = Vector{Float64}(undef,length(data.t_norm)-2)
+    
     beta_main_acc = Array{Bool}(undef,total_length,n_risk)
     gamma_main_acc = Array{Bool}(undef,total_length,n_base)
 
@@ -387,19 +448,57 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
     beta_iter_acc = Array{Bool}(undef,batchsize,n_risk)
     gamma_iter_acc = Array{Bool}(undef,batchsize,n_base)
 
+    main_time_I_diff_partial = base_haz_splines.I_diff .* gamma' 
+    off_time_I_diff_partial = base_haz_splines.I_diff .* gamma' 
+
+    main_time_I_diff = vec(sum(main_time_I_diff_partial,dims=2)) 
+    off_time_I_diff = vec(sum(off_time_I_diff_partial,dims=2))
+
+    main_time_M_partial = base_haz_splines.M .* gamma'
+    off_time_M_partial = base_haz_splines.M .* gamma'
+
+    main_time_M = vec(sum(main_time_M_partial,dims=2))
+    off_time_M = vec(sum(off_time_M_partial,dims=2))
+
+    main_stress_M_partial = risk_splines.M .* beta'
+    off_stress_M_partial = risk_splines.M .* beta'
+
+    main_stress_M = vec(sum(main_stress_M_partial,dims=2))
+    off_stress_M = vec(sum(off_stress_M_partial,dims=2))
+
+    main_inst_risk = Array{Float64}(undef,size(data.s_norm))
+    off_inst_risk = Array{Float64}(undef,size(data.s_norm))
+
+    main_risk_sums = Vector{Float64}(undef,size(main_inst_risk,1))
+    off_risk_sums = Vector{Float64}(undef,size(main_inst_risk,1))
+
     iter_init = copy(init_vals)
     @inbounds @showprogress 1 "Computing Stepsize..." for i in 1:nbatch
-        weight = sqrt(i)
+        weight = 2.0 * i
         start = (i-1)*batchsize + 1 #+ ifelse(i==1,1,0)
         stop = i*batchsize
 
         mcmc_risk_splines!(
             beta_iter,
             gamma_iter,
-            main_risk,
-            off_risk,
             beta_iter_acc,
             gamma_iter_acc,
+            main_time_I_diff,
+            off_time_I_diff,
+            main_time_I_diff_partial,
+            off_time_I_diff_partial,
+            main_time_M,
+            off_time_M,
+            main_time_M_partial,
+            off_time_M_partial,
+            main_stress_M,
+            off_stress_M,
+            main_stress_M_partial,
+            off_stress_M_partial,
+            main_inst_risk,
+            off_inst_risk,
+            main_risk_sums,
+            off_risk_sums,
             data,
             base_haz_splines,
             risk_splines,
@@ -413,6 +512,8 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
             beta_iter[end,:],
             gamma_iter[end,:]
         )
+
+        #println(iter_init')
         
         beta_main[start:stop,:] .= beta_iter
         gamma_main[start:stop,:] .= gamma_iter
@@ -426,6 +527,7 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
                 gamma_main_acc[start:stop,j],
                 weight
             )
+            #acceptance_hist[i,j] = mean(gamma_main_acc[start:stop,j])
         end
 
         for j in 1:n_risk
@@ -435,6 +537,7 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
                 beta_main_acc[start:stop,j],
                 weight
             )
+            #acceptance_hist[i,j + n_base] = mean(beta_main_acc[start:stop,j])
         end
 
         stepsize = update_stepsize!(acceptance_hist[i,:],stepsize,
@@ -840,7 +943,7 @@ Returns
 function find_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splines::Splines,nbatch::Int,
             batchsize::Int,s_map::Array{Int,2};init_vals::Union{Vector{Float64},Float64}=0.5,
             make_plots::Bool=true,show_plots::Bool=true,save_plots::Bool=true,
-            init::Float64=1e-3,target::Vector{Float64}=[0.3,0.3],
+            init=1e-3,target::Vector{Float64}=[0.3,0.3],
             scale::Float64 = 2.0,shape::Float64=10.0,offset::Float64=1.5,mdl_apnd::String="")
 
     #if typeof(theta_init) == Float64
@@ -861,10 +964,10 @@ function find_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
         offset,
         s_map
     )
-    println(size(stepsize.beta))
-    println(size(stepsize.gamma))
-    println(size(stepsize_hist))
-    println(size(acceptance_hist))
+    #println(size(stepsize.beta))
+    #println(size(stepsize.gamma))
+    #println(size(stepsize_hist))
+    #println(size(acceptance_hist))
     make_plots ? plot_stepsize_opt(stepsize_hist,acceptance_hist,base_haz_splines,risk_splines,show_plots,save_plots,mdl_apnd) : nothing
 
     return stepsize,new_init,beta_main,gamma_main
