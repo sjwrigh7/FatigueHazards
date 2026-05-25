@@ -15,6 +15,81 @@ function log_lik(gamma,M,I_diff,J,risk_terms,fail_indic)
 end
 
 """
+    log_lik(x::)
+CORRECTED log likelihood function for the survival model.
+
+This method is for a model with an M spline risk function
+"""
+function log_lik(gamma,M::Array{Float64,2},I_diff::Array{Float64,2},
+    M_beta::Array{Float64,2},beta,fail_idx::Vector{Int},
+    s_map::Array{Int,2})
+    
+    delta_cumulative_base_hazards = I_diff * gamma
+    term1 = 0.0
+
+    base_hazards = M * gamma
+    term2 = 0.0
+
+    @inbounds for i in eachindex(fail_idx)
+        term1 += sum(
+            delta_cumulative_base_hazards[1:(fail_idx[i] - 1)] .* 
+            exp.(M_beta[s_map[2:fail_idx[i],i],:] * beta)
+        )
+        term2 += log(base_hazards[fail_idx[i]] * exp(beta' * M_beta[s_map[fail_idx[i],i],:]))
+    end
+    lik = -term1 + term2
+
+    return lik
+end
+
+"""
+    log_lik(x::)
+CORRECTED log likelihood function for the survival model.
+
+This method is for a model with a linear risk function
+"""
+function log_lik(gamma,M::Array{Float64,2},I_diff::Array{Float64,2},
+    stresses::Array{Float64,2},beta,fail_idx::Vector{Int})
+    
+    delta_cumulative_base_hazards = I_diff * gamma
+    term1 = 0.0
+
+    base_hazards = M * gamma
+    term2 = 0.0
+    
+    @inbounds for i in eachindex(fail_idx)
+        term1 += sum(
+            delta_cumulative_base_hazards[1:(fail_idx[i] - 1)] .* 
+            exp.(stresses[2:fail_idx[i],i] .* beta)
+        )
+        term2 += log(base_hazards[fail_idx[i]] * exp(beta * stresses[fail_idx[i],i]))
+    end
+    lik = -term1 + term2
+
+    return lik
+end
+
+"""
+    log_lik(x::)
+CORRECTED log likelihood function for the survival model.
+
+Performance optimized
+"""
+function log_lik(time_I_diff::Vector{Float64},time_M::Vector{Float64},
+    inst_risk::Array{Float64,2},risk_sums::Vector{Float64},
+    fail_idx::Vector{Int})
+    
+    cumulative = - sum(time_I_diff .* risk_sums[2:(end-1)])
+    instant = 0.0    
+    @inbounds for i in eachindex(fail_idx)
+        instant += log(time_M[fail_idx[i]] * inst_risk[fail_idx[i],i])
+    end
+    lik = cumulative + instant
+
+    return lik
+end
+
+"""
     sum_risk(j,x,beta,delta_i)
 Calculates the sum of linear risk function values over i=1,...,n specimens that have not yet failed
 """
@@ -482,12 +557,12 @@ function init_design(design::StepStressTest,spline_design::SplineDesign)
     return splines,stress_grid,t_grid
 end
 
-function init_design(design::StepStressTest,base_haz_spline::SplineDesign,risk_spline::SplineDesign)
+function init_design(design::StepStressTest,init_base_haz_splines::Splines,init_risk_splines::Splines)
     # init time grid from 0 to maximum failure time in original data
     t_grid = collect(range(
         start = 0.0,
         step = design.n,
-        stop = 1.0
+        stop = init_base_haz_splines.params.knot_grid[end] - sqrt(eps(Float64))
     ))
     #println(design.n)
     # init stress grid over length of time grid
@@ -499,6 +574,44 @@ function init_design(design::StepStressTest,base_haz_spline::SplineDesign,risk_s
             length = length(t_grid)-1
         ))
     )
+    #println("Initial time grid = $(length(t_grid))")
+    #println("Initial stress grid = $(length(stress_grid))")
+    max_stress = init_risk_splines.params.knot_grid[end] - sqrt(eps(Float64))
+    
+    idx_under_max = findlast(x -> x <= max_stress,stress_grid)
+    stress_grid = stress_grid[1:idx_under_max]
+
+    n_extra = 100
+
+    if length(stress_grid) < length(t_grid)
+        stress_grid = vcat(
+            stress_grid,
+            repeat([max_stress],n_extra)
+        )
+        
+        time_idx = round.(
+            Int,
+            collect(
+                range(
+                    start = idx_under_max+1,
+                    stop = length(t_grid),
+                    length = n_extra
+                )
+            )
+        )
+        t_grid = t_grid[vcat(collect(1:idx_under_max),time_idx)]
+    end
+
+    
+    #idx_above_max = findall(x -> x > max_stress,stress_grid)
+    #stress_grid[idx_above_max] .= max_stress
+
+    #if length(t_grid) >= length(stress_grid)
+    #    t_grid = t_grid[idx_under_double]
+    #end
+
+    #println("Second time grid = $(length(t_grid))")
+    #println("Second stress grid = $(length(stress_grid))")
 
     if design.ds < 0.0
         target_idx = findlast(x -> x > 0.0,stress_grid)
@@ -508,17 +621,25 @@ function init_design(design::StepStressTest,base_haz_spline::SplineDesign,risk_s
         stress_grid[target_idx:end] .= target_stress
     end
 
+    #println("Third time grid = $(length(t_grid))")
+    #println("Third stress grid = $(length(stress_grid))")
+    #println(stress_grid[1:(target_idx + 1)])
+
     base_haz_splines = generate_splines(
-        base_haz_spline.k,
-        base_haz_spline.interior_knots,
-        t_grid
+        init_base_haz_splines.params.design.k,
+        init_base_haz_splines.params.design.interior_knots,
+        t_grid,
+        init_base_haz_splines.params.knot_grid[end] - sqrt(eps(Float64))
     )
 
     risk_splines = generate_splines(
-        risk_spline.k,
-        risk_spline.interior_knots,
-        t_grid
+        init_risk_splines.params.design.k,
+        init_risk_splines.params.design.interior_knots,
+        stress_grid,
+        init_risk_splines.params.knot_grid[end] - sqrt(eps(Float64))
     )
+    #update_x!(base_haz_splines,t_grid)
+    #update_x!(risk_splines,stress_grid)
 
     return base_haz_splines,risk_splines,stress_grid,t_grid
 end
@@ -537,16 +658,23 @@ function find_k(gamma,I_diff,risk_terms)
     survival_vals = cumsum((I_diff * gamma) .* risk_terms)
     
     # find failure index, k
-    k = findfirst(x -> x > log_u, survival_vals)
+    k = findlast(x -> x < log_u, survival_vals)
 
     #println(k)
     #println(isnothing(k))
-    # safety check to make sure 
+    # safety check to make sure
+    if !isnothing(k)
+        k += 1
+    end
     if isnothing(k)
         k = 1
         prev_surv = 0.0
     elseif k == 1
         prev_surv = 0.0
+    elseif k > length(survival_vals)
+        @warn "Time grid not defined with large enough upper bound"
+        k = length(survival_vals)
+        prev_surv = survival_vals[k-1]
     else
         prev_surv = survival_vals[k-1]
     end
