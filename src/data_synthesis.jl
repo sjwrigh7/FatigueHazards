@@ -14,6 +14,10 @@ function single_step_stress(material::BilinearMaterial,test::StepStressTest,erro
 
     while !has_failed
         stresses = test.s0 .+ collect(0:1:ita) * test.ds
+        #last_pos_idx = findlast(x -> x > 0.0, stresses)
+        #stresses[last_pos_idx:end] .= stresses[last_pos_idx]
+        stresses .= max.(stresses,10.0 ^ material.s_min)
+
         cycles = repeat([test.n],ita + 1)
         
         damage_i = palmgren_miner(material,stresses,cycles,error_sample)
@@ -38,6 +42,67 @@ function single_step_stress(material::BilinearMaterial,test::StepStressTest,erro
     return stresses,cycles
 end
 
+function single_step_stress(
+    damage_rule::DamageRule,
+    material::MaterialModel,
+    test::StepStressTest,
+    error_model::UnivariateDistribution,
+    constraints::TestConstraints
+)
+
+    # initialize to not have failed
+    has_failed = false
+    # incrementor for number of stress steps
+    ita = 0
+
+    stresses = []
+    cycles = []
+    cumulative_damage = Float64[]
+
+    push!(cumulative_damage,0.0)
+    # sample material strength variance on the specimen level
+    error_sample = rand(error_model)
+
+    while !has_failed
+        stresses = test.s0 .+ collect(0:1:ita) * test.ds
+        #last_pos_idx = findlast(x -> x > 0.0, stresses)
+        #stresses[last_pos_idx:end] .= stresses[last_pos_idx]
+        stresses .= max.(stresses, constraints.s_min)
+        stresses .= min.(stresses, constraints.s_max)
+
+        cycles = repeat([test.n],ita + 1)
+        
+        damage_i = eval_damage(
+            damage_rule,
+            material,
+            stresses,
+            cycles,
+            error_sample
+        )
+
+        push!(
+            cumulative_damage,
+            cumulative_damage[end] + damage_i
+        )
+
+        has_failed = cumulative_damage[end] >= 1.0
+
+        ita += 1
+    end
+
+    remaining_cycles = calc_remainder(
+        damage_rule,
+        material,
+        stresses[end],
+        error_sample,
+        cumulative_damage[end-1]
+    )
+
+    cycles[end] = remaining_cycles
+    
+    return stresses,cycles
+
+end
 
 function sweep_design(s0::Vector{Float64},ds::Vector{Float64},n::Vector{Float64},n_rep::Int)
     total_count = length(s0) * length(ds) * length(n) * n_rep
@@ -91,6 +156,42 @@ function simulate_step_stress(material::BilinearMaterial,test::Vector{StepStress
     return clean_data
 end
 
+function simulate_step_stress(
+    damage_rule::DamageRule,
+    material::MaterialModel,
+    test::Vector{StepStressTest},
+    error_model::UnivariateDistribution,
+    test_constraints::TestConstraints
+)
+    stresses = Vector{Float64}[]
+    cycles = Vector{Float64}[]
+
+    for i in eachindex(test)
+        s,n = single_step_stress(
+            damage_rule,
+            material,
+            test[i],
+            error_model,
+            test_constraints
+        )
+        push!(stresses,s)
+        push!(cycles,n)
+    end
+
+    raw_data = StepStressRawData(
+        stresses,
+        cycles
+    )
+
+    clean_data = partition_time(raw_data)
+
+    return clean_data
+end
+
+function get_fail_idx(data)
+    
+end
+
 function partition_time(data::StepStressRawData)
     time_set = [cumsum(cycle) for cycle in data.cycles]
 
@@ -135,13 +236,18 @@ function partition_time(data::StepStressRawData)
     s_norm = stresses ./ s_max
     t_norm = time_set ./ t_max
 
-    println(typeof(delta_i))
+    #println(typeof(delta_i))
 
     in_risk_idx = Vector{Int}[]
     push!(in_risk_idx,collect(axes(delta_i,2)))
     for j in 2:(length(t_norm)-1)
         idxs = findall(x -> x == 0, vec(sum(delta_i[1:(j-1),:],dims=1)))
         push!(in_risk_idx,idxs)
+    end
+
+    fail_idx = Vector{Int}(undef,size(s_norm,2))
+    for i in eachindex(fail_idx)
+        fail_idx[i] = findfirst(x -> x == 1,delta_i[:,i])
     end
 
     clean_data = StepStressData(
@@ -151,9 +257,10 @@ function partition_time(data::StepStressRawData)
         s_norm,
         t_norm,
         delta_i,
-        in_risk_idx
+        in_risk_idx,
+        fail_idx
     )
-    println(typeof(clean_data.delta_i))
+    #println(typeof(clean_data.delta_i))
     return clean_data
 end
 
