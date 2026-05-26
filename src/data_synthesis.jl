@@ -65,8 +65,8 @@ function single_step_stress(
 
     while !has_failed
         stresses = test.s0 .+ collect(0:1:ita) * test.ds
-        #last_pos_idx = findlast(x -> x > 0.0, stresses)
-        #stresses[last_pos_idx:end] .= stresses[last_pos_idx]
+        
+        curr_stress = copy(stresses[end])
         stresses .= max.(stresses, constraints.s_min)
         stresses .= min.(stresses, constraints.s_max)
 
@@ -82,12 +82,16 @@ function single_step_stress(
 
         push!(
             cumulative_damage,
-            cumulative_damage[end] + damage_i
+            #cumulative_damage[end] + damage_i
+            damage_i
         )
 
         has_failed = cumulative_damage[end] >= 1.0
-
         ita += 1
+        if (curr_stress >= constraints.s_max && test.ds >= 0.0) ||
+            (curr_stress <= constraints.s_min && test.ds <= 0.0)
+            break
+        end
     end
 
     remaining_cycles = calc_remainder(
