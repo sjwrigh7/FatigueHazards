@@ -168,7 +168,7 @@ function opt_lik(data::StepStressData,base_haz_splines::Splines,risk_splines::Sp
     opt_mins = Vector{Float64}(undef,n_opt)
     opt_inps = Array{Float64}(undef,n_opt,n_risk+n_base)
 
-    x0_bounds = [(-5.0,5.0) for _ in 1:(n_base+n_risk)]
+    x0_bounds = [(-3.0,3.0) for _ in 1:(n_base+n_risk)]
     x0_doe = LHCoptim(n_opt,n_risk+n_base,5)
     x0_doe = scaleLHC(x0_doe[1],x0_bounds)
 
