@@ -46,13 +46,13 @@ test_constraints = FatigueHazards.TestConstraints(
     1000.0,
     20000.0
 )
-#s0 = [1000.0,2000.0,4000.0,6000.0,8000.0,10000.0,14000.0]
-#ds = [0.0,100.0,1000.0,2000.0,4000.0,6000.0]
-#n0 = [1e3,1e4,1e5,1e6,1e7]
+s0 = [1000.0,4000.0,8000.0,14000.0,20000.0]
+ds = [-2000.0,2000.0,-6000.0,6000.0]
+n0 = [1e3,1e4,1e5,1e6]
 ## test design
-s0 = [1000.0,6000.0] # starting stress
-ds = [2000.0,6000.0] # stress step
-n0 = [1e4,1e6] # number of cycles per stress level
+#s0 = [1000.0,6000.0] # starting stress
+#ds = [2000.0,6000.0] # stress step
+#n0 = [1e4,1e6] # number of cycles per stress level
 
 s0 = exp.(collect(
     range(
@@ -442,8 +442,8 @@ begin
         for j in 1:n_sample
             #beta_use = bulk_samples.beta[j,:]
             #gamma_use = bulk_samples.gamma[j,:]
-            beta_use = test2[1][5000+j,:]
-            gamma_use = test2[1][5000+j,:]
+            beta_use = samples.beta[j,:]
+            gamma_use = samples.gamma[j,:]
             
             # pre calculate risk terms over time grid
             risk_terms = exp.(M_beta * beta_use)
