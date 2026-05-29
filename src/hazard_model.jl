@@ -557,50 +557,89 @@ function init_design(design::StepStressTest,spline_design::SplineDesign)
     return splines,stress_grid,t_grid
 end
 
-function init_design(design::StepStressTest,init_base_haz_splines::Splines,init_risk_splines::Splines)
+function init_design(
+    design::StepStressTest,
+    init_base_haz_splines::Splines,
+    init_risk_splines::Splines,
+    constraints::TestConstraints,
+    data::StepStressData
+)
     # init time grid from 0 to maximum failure time in original data
-    t_grid = collect(range(
+    t_grid = range(
         start = 0.0,
         step = design.n,
         stop = init_base_haz_splines.params.knot_grid[end] - sqrt(eps(Float64))
-    ))
+    )
     #println(design.n)
+    #println(t_grid)
     # init stress grid over length of time grid
-    stress_grid = vcat(
-        0.0,
-        collect(range(
-            start = design.s0,
-            step = design.ds,
-            length = length(t_grid)-1
-        ))
+    stress_grid = range(
+        start = design.s0,
+        step = design.ds,
+        length = length(t_grid)-1
     )
     #println("Initial time grid = $(length(t_grid))")
     #println("Initial stress grid = $(length(stress_grid))")
-    max_stress = init_risk_splines.params.knot_grid[end] - sqrt(eps(Float64))
-    
-    idx_under_max = findlast(x -> x <= max_stress,stress_grid)
-    stress_grid = stress_grid[1:idx_under_max]
+    #max_stress = init_risk_splines.params.knot_grid[end] - sqrt(eps(Float64))
+    max_stress = constraints.s_max / data.s_max
+    min_stress = constraints.s_min / data.s_max
+    @assert min_stress <= stress_grid[1] <= max_stress
+    idx_lim = length(stress_grid)
+    if design.ds > 0
+        idx_under_max = findlast(x -> x <= max_stress,stress_grid)
+        idx_lim = min(
+            idx_lim,
+            idx_under_max
+        )
+        fill_stress = max_stress
+    elseif design.ds < 0
+        idx_above_min = findlast(x -> x >= min_stress,stress_grid)
+        idx_lim = min(
+            idx_lim,
+            idx_above_min
+        )
+        fill_stress = min_stress
+    end
+
+    stress_grid = vcat(
+        0.0,
+        collect(
+            stress_grid[1:idx_lim]
+        )
+    )
+
+    idx_lim += 1
 
     n_extra = 100
 
     if length(stress_grid) < length(t_grid)
         stress_grid = vcat(
             stress_grid,
-            repeat([max_stress],n_extra)
+            repeat([fill_stress],n_extra)
         )
         
         time_idx = round.(
             Int,
             collect(
                 range(
-                    start = idx_under_max+1,
+                    start = idx_lim+1,
                     stop = length(t_grid),
                     length = n_extra
                 )
             )
         )
-        t_grid = t_grid[vcat(collect(1:idx_under_max),time_idx)]
+        t_grid = collect(
+            t_grid[
+                vcat(
+                    collect(1:idx_lim),
+                    time_idx
+                )
+            ]
+        )
+    else
+        t_grid = collect(t_grid)
     end
+    
 
     
     #idx_above_max = findall(x -> x > max_stress,stress_grid)
@@ -613,13 +652,16 @@ function init_design(design::StepStressTest,init_base_haz_splines::Splines,init_
     #println("Second time grid = $(length(t_grid))")
     #println("Second stress grid = $(length(stress_grid))")
 
+    #=
     if design.ds < 0.0
         target_idx = findlast(x -> x > 0.0,stress_grid)
         #println(stress_grid[1:5])
         #println(target_idx)
+        #println(stress_grid)
         target_stress = stress_grid[target_idx]
         stress_grid[target_idx:end] .= target_stress
     end
+    =#
 
     #println("Third time grid = $(length(t_grid))")
     #println("Third stress grid = $(length(stress_grid))")
