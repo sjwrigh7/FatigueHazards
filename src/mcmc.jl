@@ -1018,26 +1018,26 @@ function bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
     risk_splines::Splines,s_map::Array{Int,2},n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,
     lag::Int;mem_lim = 0,ele_lim = 0,length_lim = 1_000_000,multithread=true)
 
-    println("Running batch MCMC to draw i.i.d. posteior samples...")
-    println("The desired number of i.i.d. samples is ",n_mcmc)
+    #println("Running batch MCMC to draw i.i.d. posteior samples...")
+    #println("The desired number of i.i.d. samples is ",n_mcmc)
 
     if (mem_lim != 0) && (ele_lim == 0)
-        println("A maximum memory footprint of $(mem_lim / 1e6) MB is specified...")
+        #println("A maximum memory footprint of $(mem_lim / 1e6) MB is specified...")
         max_arr_len = Int(floor(mem_lim / (splines.params.num_basis * 8)))
-        println("The splines have $(splines.params.num_basis) bases, allowing a maximum batch array length of $(max_arr_len)")
+        #println("The splines have $(splines.params.num_basis) bases, allowing a maximum batch array length of $(max_arr_len)")
     elseif (mem_lim == 0) && (ele_lim != 0)
-        println("A maximum number of $(ele_lim) is specified...")
+        #println("A maximum number of $(ele_lim) is specified...")
         max_arr_len = Int(floor(ele_lim / splines.params.num_basis))
-        println("The splines have $(splines.params.num_basis) bases, allowing a maximum batch array length of $(max_arr_len)")
+        #println("The splines have $(splines.params.num_basis) bases, allowing a maximum batch array length of $(max_arr_len)")
     elseif (mem_lim != 0) && (ele_lim != 0)
-        println("Conflicting limit specifications:")
-        println("A maximum memory footprint of $(mem_lim / 1e6) MB is specified")
-        println("AND A maximum number of $(ele_lim) is specified...")
-        println("Defaulting to memory limit...")
+        #println("Conflicting limit specifications:")
+        #println("A maximum memory footprint of $(mem_lim / 1e6) MB is specified")
+        #println("AND A maximum number of $(ele_lim) is specified...")
+        #println("Defaulting to memory limit...")
         max_arr_len = Int(floor(mem_lim / (splines.params.num_basis * 8)))
-        println("The splines have $(splines.params.num_basis) bases, allowing a maximum batch array length of $(max_arr_len)")
+        #println("The splines have $(splines.params.num_basis) bases, allowing a maximum batch array length of $(max_arr_len)")
     elseif (mem_lim == 0) && (ele_lim == 0) && (length_lim != 0)
-        println("A maximum array length of $length_lim is specified...")
+        #println("A maximum array length of $length_lim is specified...")
         max_arr_len = length_lim
     elseif (mem_lim == 0) && (ele_lim == 0) && (length_lim == 0)
         @warn "No limit specified for MCMC...
@@ -1306,17 +1306,17 @@ function _bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
     off_risk_sums = Vector{Float64}(undef,size(main_inst_risk,1))
 
     n_avail = Int(floor((max_arr_len - n_burn) / lag))
-    println("With a burn value of $n_burn, and a lag of $lag, $n_avail i.i.d. samples can be drawn per batch")
+    #println("With a burn value of $n_burn, and a lag of $lag, $n_avail i.i.d. samples can be drawn per batch")
     if n_avail < n_mcmc
         n_iid = n_avail
         n_run = max_arr_len
         n_rep = Int(floor(n_mcmc / n_iid))
-        println("A total of $(n_rep + 1) batches are necessary to achieve the target number of samples")
+        #println("A total of $(n_rep + 1) batches are necessary to achieve the target number of samples")
     else
         n_iid = n_mcmc
         n_run = max_arr_len
         n_rep = 0
-        println("A single batch is sufficient to achieve the target number of samples")
+        #println("A single batch is sufficient to achieve the target number of samples")
     end
 
     remainder = n_mcmc - (n_iid * n_rep)
@@ -1325,7 +1325,7 @@ function _bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
     base_range = collect((n_burn + 1):lag:n_run)
 
     Threads.@threads for i in 1:n_rep
-        println("Running batch #$i / $(n_rep + 1) on thread $(Threads.threadid()) with an MCMC chain length of $n_run, yielding $n_iid i.i.d. samples")
+        #println("Running batch #$i / $(n_rep + 1) on thread $(Threads.threadid()) with an MCMC chain length of $n_run, yielding $n_iid i.i.d. samples")
         start_idx = (i - 1) * n_iid + 1
         stop_idx = i * n_iid
         mcmc_risk_splines!(
@@ -1366,7 +1366,7 @@ function _bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
         full_gamma[start_idx:stop_idx,:] .= gamma_thin
     end
 
-    println("Running batch #$(n_rep + 1) (final) with an MCMC chain length of $remainder_sim, yielding $remainder i.i.d. samples")
+    #println("Running batch #$(n_rep + 1) (final) with an MCMC chain length of $remainder_sim, yielding $remainder i.i.d. samples")
     mcmc_risk_splines!(
         beta_draws,
         gamma_draws,
@@ -1503,17 +1503,17 @@ function _par_bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Spli
 
 
     n_avail = Int(floor((max_arr_len - n_burn) / lag))
-    println("With a burn value of $n_burn, and a lag of $lag, $n_avail i.i.d. samples can be drawn per batch")
+    #println("With a burn value of $n_burn, and a lag of $lag, $n_avail i.i.d. samples can be drawn per batch")
     if n_avail < n_mcmc
         n_iid = n_avail
         n_run = max_arr_len
         n_rep = Int(floor(n_mcmc / n_iid))
-        println("A total of $(n_rep + 1) batches are necessary to achieve the target number of samples")
+        #println("A total of $(n_rep + 1) batches are necessary to achieve the target number of samples")
     else
         n_iid = n_mcmc
         n_run = max_arr_len
         n_rep = 0
-        println("A single batch is sufficient to achieve the target number of samples")
+        #println("A single batch is sufficient to achieve the target number of samples")
     end
 
     remainder = n_mcmc - (n_iid * n_rep)
@@ -1522,7 +1522,7 @@ function _par_bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Spli
     base_range = collect((n_burn + 1):lag:n_run)
 
     Threads.@threads for i in 1:n_rep
-        println("Running batch #$i / $(n_rep + 1) on thread $(Threads.threadid()) with an MCMC chain length of $n_run, yielding $n_iid i.i.d. samples")
+        #println("Running batch #$i / $(n_rep + 1) on thread $(Threads.threadid()) with an MCMC chain length of $n_run, yielding $n_iid i.i.d. samples")
         start_idx = (i - 1) * n_iid + 1
         stop_idx = i * n_iid
         mcmc_risk_splines!(
@@ -1563,7 +1563,7 @@ function _par_bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Spli
         full_gamma[start_idx:stop_idx,:] .= gamma_thin
     end
 
-    println("Running batch #$(n_rep + 1) (final) with an MCMC chain length of $remainder_sim, yielding $remainder i.i.d. samples")
+    #println("Running batch #$(n_rep + 1) (final) with an MCMC chain length of $remainder_sim, yielding $remainder i.i.d. samples")
     mcmc_risk_splines!(
         beta_iter[1],
         gamma_iter[1],
