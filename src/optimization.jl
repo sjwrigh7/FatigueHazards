@@ -20,6 +20,47 @@ function init_opt_design(s_min=1e3,s_max=2e4,ds_min=-1e4,ds_max=1e4,n_min=1e3,n_
     return design
 end
 
+function log_doe(lin_doe_norm,l_bounds,u_bounds)
+    log_doe = similar(lin_doe_norm)
+    for j in axes(log_doe,2)
+        if l_bounds[j] > 0
+            log_min = log(l_bounds[j])
+            log_max = log(u_bounds[j])
+            log_doe[:,j] .= exp.(
+                lin_doe_norm[:,j] .* (log_max - log_min) .+ log_min
+            )
+        elseif l_bounds[j] <= 0 && u_bounds[j] > 0
+            log_min = min(4,log(u_bounds[j]) - 4)
+            min_abs = log(abs(u_bounds[j]))
+            max_abs = log(abs(u_bounds[j]))
+            zero_pos = (min_abs - log_min) / (min_abs - log_min + max_abs - log_min)
+            curr_vec = copy(lin_doe_norm[:,j])
+            for i in eachindex(curr_vec)
+                if curr_vec[i] <= zero_pos
+                    log_doe[i,j] = -exp(
+                        ((zero_pos - curr_vec[i]) / 
+                        zero_pos) * (min_abs - log_min) .+
+                        log_min
+                    )
+                else
+                    log_doe[i,j] = exp(
+                        (curr_vec[i] - zero_pos) / (1 - zero_pos) *
+                        (max_abs - log_min) .+ log_min
+                    )
+                end
+            end
+        elseif l_bounds[j] < 0 && u_bounds[j] <= 0
+            log_min = log(abs(u_bounds[j]))
+            log_max = log(abs(l_bounds[j]))
+            log_doe[:,j] .= -exp.(
+                lin_doe_norm[:,j] .* (log_max - log_min) .+ log_min
+            )
+        end
+    end
+    log_doe_norm = (log_doe .- l_bounds') ./ (u_bounds - l_bounds)'
+    return log_doe,log_doe_norm
+end
+
 function lhc_sampler(plan)
     design = Array{Float64}(undef,size(plan))
     n_breaks = size(plan,1) + 1
@@ -43,7 +84,8 @@ function init_data(
     design::OptDesign,
     samples::PosteriorIID,
     data::StepStressData,
-    base_haz_splines::Splines;
+    base_haz_splines::Splines,
+    constraints::TestConstraints;
     n_init=30,
     n_rep=7,
     n_inner=2500,
@@ -81,6 +123,7 @@ function init_data(
                 base_haz_splines,
                 n_outer,
                 n_inner,
+                constraints;
                 results=:scalar
             )
 
@@ -95,7 +138,8 @@ function init_data(
     design::OptDesignReduced,
     samples::PosteriorIID,
     data::StepStressData,
-    base_haz_splines::Splines;
+    base_haz_splines::Splines,
+    constraints::TestConstraints;
     n_init=15,
     n_rep=7,
     n_inner=2500,
@@ -131,6 +175,7 @@ function init_data(
                 base_haz_splines,
                 n_outer,
                 n_inner,
+                constraints;
                 results=:scalar
             )
 
@@ -145,7 +190,8 @@ function optimize_design(
     samples::PosteriorIID,
     data::StepStressData,
     base_haz_splines::Splines,
-    n_opt::Int;
+    n_opt::Int,
+    constraints::TestConstraints;
     s_min=1e3,
     s_max=2e4,
     ds_min=-1e4,
@@ -182,13 +228,14 @@ function optimize_design(
             n_init = 30
         end
     end
-    println(n_init)
+    #println(n_init)
 
     lower_bounds,upper_bounds,doe_norm,doe_resp = init_data(
         design,
         samples,
         data,
-        base_haz_splines;
+        base_haz_splines,
+        constraints;
         n_init=n_init,
         n_rep=n_rep,
         n_inner=n_inner,
@@ -295,6 +342,7 @@ function optimize_design(
                 base_haz_splines,
                 n_outer,
                 n_inner,
+                constraints;
                 results=:scalar
             )
 
@@ -348,6 +396,7 @@ function optimize_design(
             base_haz_splines,
             n_outer,
             n_inner,
+            constraints;
             results=:scalar
         )
         mdl_out = predict_f(mld,permutedims(validation_doe_norm[i,:]'))
@@ -379,7 +428,8 @@ function init_data(
     samples::PosteriorIID,
     data::StepStressData,
     base_haz_splines::Splines,
-    risk_splines::Splines;
+    risk_splines::Splines,
+    constraints::TestConstraints;
     n_init=30,
     n_rep=3,
     n_inner=2500,
@@ -393,14 +443,19 @@ function init_data(
     ]
     doe_init = LHCoptim(n_init,3,20)
     doe_norm = lhc_sampler(doe_init[1])
-    doe = scaleLHC(doe_norm,doe_bounds)
+    #doe = scaleLHC(doe_norm,doe_bounds)
 
     lower_bounds = [p[1] for p in doe_bounds]
     upper_bounds = [p[2] for p in doe_bounds]
 
+    doe,doe_norm = log_doe(doe_norm,lower_bounds,upper_bounds)
+    #doe = doe_norm .* (upper_bounds .- lower_bounds)' .+ lower_bounds'
+
     #doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
 
     doe_resp = Array{Float64}(undef,n_init,n_rep)
+    #println(doe_norm)
+    #println(doe)
 
     @showprogress "Solving initial design..." for i in 1:n_init
         temp_design = StepStressTest(
@@ -411,7 +466,7 @@ function init_data(
         open("../examples/temp_designs.txt","a") do f
             println(f,join(string.(doe[i,:]),','))
         end
-
+        #println("n = $(temp_design.n)")
         for j in 1:n_rep
             ent_val = eval_entropy(
                 temp_design,
@@ -421,6 +476,7 @@ function init_data(
                 risk_splines,
                 n_outer,
                 n_inner,
+                constraints;
                 results=:scalar
             )
 
@@ -436,7 +492,8 @@ function init_data(
     samples::PosteriorIID,
     data::StepStressData,
     base_haz_splines::Splines,
-    risk_splines::Splines;
+    risk_splines::Splines,
+    constraints::TestConstraints;
     n_init=15,
     n_rep=3,
     n_inner=2500,
@@ -450,11 +507,12 @@ function init_data(
     ]
     doe_init = LHCoptim(n_init,2,20)
     doe_norm = lhc_sampler(doe_init[1])
-    doe = scaleLHC(doe_norm,doe_bounds)
+    #doe = scaleLHC(doe_norm,doe_bounds)
 
     lower_bounds = [p[1] for p in doe_bounds]
     upper_bounds = [p[2] for p in doe_bounds]
 
+    doe,doe_norm = log_doe(doe_norm,lower_bounds,upper_bounds)
     #doe_norm = (doe .- lower_bounds') ./ (upper_bounds' .- lower_bounds')
 
     doe_resp = Array{Float64}(undef,n_init,n_rep)
@@ -476,7 +534,8 @@ function init_data(
                 base_haz_splines,
                 risk_splines,
                 n_outer,
-                n_inner;
+                n_inner,
+                constraints;
                 results=:scalar,
                 multithread=multithread,
                 return_times=false
@@ -494,7 +553,8 @@ function optimize_design(
     data::StepStressData,
     base_haz_splines::Splines,
     risk_splines::Splines,
-    n_opt::Int;
+    n_opt::Int,
+    constraints::TestConstraints;
     s_min=1e3,
     s_max=2e4,
     ds_min=-1e4,
@@ -532,13 +592,14 @@ function optimize_design(
             n_init = 30
         end
     end
-
+    #println(design)
     lower_bounds,upper_bounds,doe_norm,doe_resp = init_data(
         design,
         samples,
         data,
         base_haz_splines,
-        risk_splines;
+        risk_splines,
+        constraints;
         n_init=n_init,
         n_rep=n_rep,
         n_inner=n_inner,
@@ -610,16 +671,44 @@ function optimize_design(
     curr_max,_ = findmax(mdl.y)
     temp_ent = Vector{Float64}(undef,n_rep)
 
+    n_optim_evals = 20
+    opt_mins = Vector{Float64}(undef,n_optim_evals)
+    opt_inps = Array{Float64}(undef,n_optim_evals,length(lower_bounds))
+
+
     @showprogress "Running Bayesian optimization..." for i in 1:n_opt
         curr_max = max(curr_max,mdl.y[end])
-        opt_res = bboptimize(
-            objective_max_expected_improvement;
-            SearchRange = opt_bounds,
-            PopulationSize=pop_size,
-            MaxTime=max_time,
-            TraceMode = :silent
-        )
-        norm_vals = best_candidate(opt_res)
+        #opt_res = bboptimize(
+        #    objective_max_expected_improvement;
+        #    SearchRange = opt_bounds,
+        #    PopulationSize=pop_size,
+        #    MaxTime=max_time,
+        #    TraceMode = :silent
+        #)
+        #norm_vals = best_candidate(opt_res)
+        x0_doe = LHCoptim(n_optim_evals,length(lower_bounds),5)[1]
+        x0 = lhc_sampler(x0_doe)
+        #x0 .= x0 .* (upper_bounds .- lower_bounds .- 2 * sqrt(eps(Float64)))' .+ lower_bounds' .+ sqrt(eps(Float64))
+
+        for j in axes(x0,1)
+            temp = Optim.optimize(
+                objective_max_expected_improvement,
+                sqrt(eps(Float64)),
+                1 - sqrt(eps(Float64)),
+                #lower_bounds,
+                #upper_bounds,
+                x0[j,:],
+                Optim.Fminbox(Optim.LBFGS()),
+                autodiff=ADTypes.AutoForwardDiff()
+            )
+            opt_mins[j] = temp.minimum
+            opt_inps[j,:] .= temp.minimizer
+        end
+
+        _,min_idx = findmin(opt_mins)
+        norm_vals = opt_inps[min_idx,:]
+        #println(norm_vals)
+
         scaled_vals = norm_vals .* (upper_bounds .- lower_bounds) .+ lower_bounds
 
         if length(lower_bounds) == 2
@@ -648,7 +737,8 @@ function optimize_design(
                 base_haz_splines,
                 risk_splines,
                 n_outer,
-                n_inner;
+                n_inner,
+                constraints;
                 results=:scalar,
                 multithread=multithread,
                 return_times=false
@@ -706,6 +796,7 @@ function optimize_design(
             risk_splines,
             n_outer,
             n_inner,
+            constraints;
             results=:scalar
         )
         mdl_out = predict_f(mdl,permutedims(validation_doe_norm[i,:]'))
