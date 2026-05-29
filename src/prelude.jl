@@ -53,7 +53,7 @@ function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spl
         base_haz_interior_knots,
         data.t_norm[1:(end-1)],
         #data.t_norm[(end-1)] + 1.0
-        2.5e8 / data.t_max
+        2.5e9 / data.t_max
     )
 
     #s_unique = sort(unique(data.s_norm[2:(end-1),:]))
