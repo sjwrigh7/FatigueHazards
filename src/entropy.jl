@@ -1,5 +1,9 @@
-function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true,
+function eval_entropy(
+    design::StepStressTest,data::StepStressData,
+    posterior_iid::PosteriorIID,base_haz_splines::Splines,
+    n_sim_outer::Int,n_sim_inner,
+    constraints::TestConstraints;
+    results=:scalar,multithread=true,
     return_times=false)
 
     if multithread
@@ -9,7 +13,8 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             posterior_iid,
             base_haz_splines,
             n_sim_outer,
-            n_sim_inner;
+            n_sim_inner,
+            constraints;
             return_times=return_times
         )
         log_cond = temp[1]
@@ -24,7 +29,8 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             posterior_iid,
             base_haz_splines,
             n_sim_outer,
-            n_sim_inner
+            n_sim_inner,
+            constraints
         )
     end
 
@@ -56,9 +62,12 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
     end
 end
 
-function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    base_haz_splines::Splines,risk_splines::Splines,
-    n_sim_outer::Int,n_sim_inner;results=:scalar,multithread=true,
+function eval_entropy(
+    design::StepStressTest,data::StepStressData,
+    posterior_iid::PosteriorIID,base_haz_splines::Splines,
+    risk_splines::Splines,n_sim_outer::Int,
+    n_sim_inner,constraints::TestConstraints;
+    results=:scalar,multithread=true,
     return_times=false)
 
     if multithread
@@ -69,7 +78,8 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             base_haz_splines,
             risk_splines,
             n_sim_outer,
-            n_sim_inner;
+            n_sim_inner,
+            constraints;
             return_times=return_times
         )
         log_cond = temp[1]
@@ -85,7 +95,8 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
             base_haz_splines,
             risk_splines,
             n_sim_outer,
-            n_sim_inner;
+            n_sim_inner,
+            constraints;
             return_times=return_times
         )
         log_cond = temp[1]
@@ -124,8 +135,8 @@ function eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid:
 end
 
 function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    init_base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner::Int;
-    return_times=false)
+    init_base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner::Int,
+    constraints::TestConstraints;return_times=false)
 
     sample_avail = length(posterior_iid.beta)
 
@@ -135,7 +146,10 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         design.n / data.t_max
     )
 
-    base_haz_splines,stress_grid,t_grid = init_design(design_norm,init_base_haz_splines)
+    base_haz_splines,stress_grid,t_grid = init_design(
+        design_norm,
+        init_base_haz_splines
+    )
     #println(t_grid)
 
     if n_sim_outer > sample_avail
@@ -255,8 +269,8 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
 end
 
 function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    init_base_haz_splines::Splines,init_risk_splines::Splines,n_sim_outer::Int,n_sim_inner::Int;
-    return_times=false)
+    init_base_haz_splines::Splines,init_risk_splines::Splines,n_sim_outer::Int,n_sim_inner::Int,
+    constraints::TestConstraints;return_times=false)
 
     sample_avail = size(posterior_iid.beta,1)
 
@@ -266,7 +280,13 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
         design.n / data.t_max
     )
 
-    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(design_norm,init_base_haz_splines,init_risk_splines)
+    base_haz_splines,risk_splines,stress_grid,t_grid = init_design(
+        design_norm,
+        init_base_haz_splines,
+        init_risk_splines,
+        constraints,
+        data
+    )
     #println(t_grid)
 
     if n_sim_outer > sample_avail
@@ -376,8 +396,8 @@ function _eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid
 end
 
 function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    init_base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner;
-    return_times=false)
+    init_base_haz_splines::Splines,n_sim_outer::Int,n_sim_inner,
+    constraints::TestConstraints;return_times=false)
 
     sample_avail = length(posterior_iid.beta)
 
@@ -387,7 +407,10 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         design.n / data.t_max
     )
 
-    base_haz_splines,stress_grid,t_grid = init_design(design_norm,init_base_haz_splines)
+    base_haz_splines,stress_grid,t_grid = init_design(
+        design_norm,
+        init_base_haz_splines
+    )
     #println(t_grid)
 
     if n_sim_outer > sample_avail
@@ -515,8 +538,8 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
 end
 
 function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior_iid::PosteriorIID,
-    init_base_haz_splines::Splines,init_risk_splines::Splines,n_sim_outer::Int,n_sim_inner;
-    return_times=false)
+    init_base_haz_splines::Splines,init_risk_splines::Splines,n_sim_outer::Int,n_sim_inner,
+    constraints::TestConstraints;return_times=false)
 
     sample_avail = size(posterior_iid.beta,1)
 
@@ -529,7 +552,9 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
     base_haz_splines,risk_splines,stress_grid,t_grid = init_design(
         design_norm,
         init_base_haz_splines,
-        init_risk_splines
+        init_risk_splines,
+        constraints,
+        data
     )
     #println(t_grid)
 
