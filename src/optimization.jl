@@ -1,4 +1,4 @@
-function init_opt_design(s_min=1e3,s_max=2e4,ds_min=-1e4,ds_max=1e4,n_min=1e3,n_max=1e7;reduce=false,n_const=5e3)
+function init_opt_design(s_min=93.4,s_max=210.0,ds_min=-100.0,ds_max=100.0,n_min=1e3,n_max=1e7;reduce=false,n_const=5e3)
     if reduce
         design = OptDesignReduced(
             s_min,
@@ -434,6 +434,7 @@ function init_data(
     n_rep=3,
     n_inner=2500,
     n_outer=2500,
+    obj=:entropy
 )
 
     doe_bounds = [
@@ -468,7 +469,7 @@ function init_data(
         end
         #println("n = $(temp_design.n)")
         for j in 1:n_rep
-            ent_val = eval_entropy(
+            ent_val,times = eval_entropy(
                 temp_design,
                 data,
                 samples,
@@ -477,10 +478,16 @@ function init_data(
                 n_outer,
                 n_inner,
                 constraints;
-                results=:scalar
+                results=:scalar,
+                return_times=true
             )
 
-            doe_resp[i,j] = ent_val
+            scaled_times = times .* data.t_max
+            if obj == :entropy
+                doe_resp[i,j] = ent_val
+            elseif obj == :modified
+                doe_resp[i,j] = ent_val / log(mean(scaled_times))
+            end
         end
     end
 
@@ -498,7 +505,8 @@ function init_data(
     n_rep=3,
     n_inner=2500,
     n_outer=2500,
-    multithread=true
+    multithread=true,
+    obj=:entropy
 )
 
     doe_bounds = [
@@ -527,7 +535,7 @@ function init_data(
             println(f,join(string.(doe[i,:]),','))
         end
         for j in 1:n_rep
-            ent_val = eval_entropy(
+            ent_val,times = eval_entropy(
                 temp_design,
                 data,
                 samples,
@@ -538,10 +546,15 @@ function init_data(
                 constraints;
                 results=:scalar,
                 multithread=multithread,
-                return_times=false
+                return_times=true
             )
 
-            doe_resp[i,j] = ent_val
+            scaled_times = times .* data.t_max
+            if obj == :entropy
+                doe_resp[i,j] = ent_val
+            elseif obj == :modified
+                doe_resp[i,j] = ent_val / log(mean(scaled_times))
+            end
         end
     end
 
@@ -555,10 +568,10 @@ function optimize_design(
     risk_splines::Splines,
     n_opt::Int,
     constraints::TestConstraints;
-    s_min=1e3,
-    s_max=2e4,
-    ds_min=-1e4,
-    ds_max=1e4,
+    s_min=93.4,
+    s_max=210.0,
+    ds_min=-100.0,
+    ds_max=100.0,
     n_min=1e3,
     n_max=1e7,
     n_const=5e3,
@@ -571,8 +584,9 @@ function optimize_design(
     n_mcmc=20000,
     pop_size=5000,
     max_time=1.5,
-    multithread=true
-
+    multithread=true,
+    obj=:entropy,
+    n_validate=0
 )
     design = init_opt_design(
         s_min,
@@ -603,7 +617,8 @@ function optimize_design(
         n_init=n_init,
         n_rep=n_rep,
         n_inner=n_inner,
-        n_outer=n_outer
+        n_outer=n_outer,
+        obj=obj
     )
 
     opt_bounds = [(0.0,1.0) for i in eachindex(lower_bounds)]
@@ -730,7 +745,7 @@ function optimize_design(
 
         temp_ent .= -10.0
         for j in 1:n_rep
-            ent_val = eval_entropy(
+            ent_val,times = eval_entropy(
                 temp_design,
                 data,
                 samples,
@@ -741,10 +756,15 @@ function optimize_design(
                 constraints;
                 results=:scalar,
                 multithread=multithread,
-                return_times=false
+                return_times=true
             )
 
-            temp_ent[j] = ent_val
+            scaled_times = times .* data.t_max
+            if obj == :entropy
+                temp_ent[j] = ent_val
+            elseif obj == :modified
+                temp_ent[j] = ent_val / log(mean(scaled_times))
+            end
         end
 
         for j in 1:n_use
@@ -767,41 +787,48 @@ function optimize_design(
         end
     end
 
-    validation_doe_init = LHCoptim(4,length(lower_bounds),20)
-    validation_doe_norm = lhc_sampler(validation_doe_init[1])
-    validation_resp = Vector{Float64}(undef,size(validation_doe_norm,1))
-    validation_predict = similar(validation_resp)
-    validation_uncert = similar(validation_resp)
-    for i in axes(validation_doe_norm,1)
-        scaled_vals = validation_doe_norm[i,:] .* (upper_bounds .- lower_bounds) .+ lower_bounds
+    if n_validate > 0
+        validation_doe_init = LHCoptim(n_validate,length(lower_bounds),20)
+        validation_doe_norm = lhc_sampler(validation_doe_init[1])
+        validation_resp = Vector{Float64}(undef,size(validation_doe_norm,1))
+        validation_predict = similar(validation_resp)
+        validation_uncert = similar(validation_resp)
+        for i in axes(validation_doe_norm,1)
+            scaled_vals = validation_doe_norm[i,:] .* (upper_bounds .- lower_bounds) .+ lower_bounds
 
-        if length(lower_bounds) == 2
-            temp_design = StepStressTest(
-                scaled_vals[1],
-                scaled_vals[2],
-                design.n_const
+            if length(lower_bounds) == 2
+                temp_design = StepStressTest(
+                    scaled_vals[1],
+                    scaled_vals[2],
+                    design.n_const
+                )
+            else
+                temp_design = StepStressTest(
+                    scaled_vals[1],
+                    scaled_vals[2],
+                    scaled_vals[3]
+                )
+            end
+            validation_resp[i] = eval_entropy(
+                temp_design,
+                data,
+                samples,
+                base_haz_splines,
+                risk_splines,
+                n_outer,
+                n_inner,
+                constraints;
+                results=:scalar
             )
-        else
-            temp_design = StepStressTest(
-                scaled_vals[1],
-                scaled_vals[2],
-                scaled_vals[3]
-            )
+            mdl_out = predict_f(mdl,permutedims(validation_doe_norm[i,:]'))
+            validation_predict[i] = mdl_out[1][1]
+            validation_uncert[i] = mdl_out[2][1]
         end
-        validation_resp[i] = eval_entropy(
-            temp_design,
-            data,
-            samples,
-            base_haz_splines,
-            risk_splines,
-            n_outer,
-            n_inner,
-            constraints;
-            results=:scalar
-        )
-        mdl_out = predict_f(mdl,permutedims(validation_doe_norm[i,:]'))
-        validation_predict[i] = mdl_out[1][1]
-        validation_uncert[i] = mdl_out[2][1]
+    else
+        validation_doe_norm = nothing
+        validation_resp = nothing
+        validation_predict = nothing
+        validation_uncert = nothing
     end
 
     _,best_idx = findmax(mdl.y)
