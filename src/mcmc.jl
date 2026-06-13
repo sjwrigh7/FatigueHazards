@@ -6,7 +6,9 @@ distributions for survival model parameters.
 This method is for the basis coefficients of a set of M & I splines on time domain
 and a single coefficient for a linear risk function in stress domain.
 """
-function mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,n_mcmc::Int,steps::StepSize,init_vals)
+function mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
+    n_mcmc::Int,steps::StepSize,init_vals,
+    priors::Priors)
     
     beta = init_vals[1]
     gamma = init_vals[2:end]
@@ -72,7 +74,8 @@ function mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,n_mcmc:
                 main_risk_sums,
                 data.fail_idx,
                 steps.gamma[j],
-                j
+                j,
+                priors
             )
             #gamma[j] = gamma_sample
             gamma_draws[i,j] = gamma[j]
@@ -91,6 +94,7 @@ function mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,n_mcmc:
             data.in_risk_idx,
             data.s_norm,
             steps.beta,
+            priors
         )
 
         beta = beta_sample
@@ -121,7 +125,8 @@ and a set of M splines in stress domain.
 """
 function mcmc_risk_splines(
     data::StepStressData,base_haz_splines::Splines,risk_splines::Splines,
-    n_mcmc::Int,steps::StepSize,s_map::Array{Int,2},init_vals)
+    n_mcmc::Int,steps::StepSize,s_map::Array{Int,2},
+    init_vals,priors::Priors)
     
     n_risk = risk_splines.params.num_basis
     beta = init_vals[1:n_risk]
@@ -197,7 +202,8 @@ function mcmc_risk_splines(
                 main_risk_sums,
                 data.fail_idx,
                 steps.gamma[j],
-                j
+                j,
+                priors
             )
             #gamma[j] = gamma_sample
             gamma_draws[i,j] = gamma[j]
@@ -224,7 +230,8 @@ function mcmc_risk_splines(
                 data.in_risk_idx,
                 s_map,
                 steps.beta[j],
-                j
+                j,
+                priors
             )
 
             #beta[j] = beta_sample
@@ -264,7 +271,8 @@ function mcmc_risk_splines!(
     main_inst_risk::Array{Float64,2},off_inst_risk::Array{Float64,2},
     main_risk_sums::Vector{Float64},off_risk_sums::Vector{Float64},
     data::StepStressData,base_haz_splines::Splines,risk_splines::Splines,
-    n_mcmc::Int,steps::StepSize,s_map::Array{Int,2},init_vals)
+    n_mcmc::Int,steps::StepSize,s_map::Array{Int,2},init_vals,
+    priors::Priors)
     
     n_risk = risk_splines.params.num_basis
     beta = init_vals[1:n_risk]
@@ -307,7 +315,8 @@ function mcmc_risk_splines!(
                 main_risk_sums,
                 data.fail_idx,
                 steps.gamma[j],
-                j
+                j,
+                priors
             )
 
             gamma_draws[i,j] = gamma[j]
@@ -333,7 +342,8 @@ function mcmc_risk_splines!(
                 data.in_risk_idx,
                 s_map,
                 steps.beta[j],
-                j
+                j,
+                priors
             )
 
             beta_draws[i,j] = beta[j]
@@ -370,7 +380,7 @@ function mcmc_linear_risk!(
     main_inst_risk::Array{Float64,2},off_inst_risk::Array{Float64,2},
     main_risk_sums::Vector{Float64},off_risk_sums::Vector{Float64},
     data::StepStressData,base_haz_splines::Splines,
-    n_mcmc::Int,steps::StepSize,init_vals)
+    n_mcmc::Int,steps::StepSize,init_vals,priors::Priors)
     
     beta = init_vals[1]
     gamma = init_vals[2:end]
@@ -411,7 +421,8 @@ function mcmc_linear_risk!(
                 main_risk_sums,
                 data.fail_idx,
                 steps.gamma[j],
-                j
+                j,
+                priors
             )
 
             gamma_draws[i,j] = gamma[j]
@@ -431,6 +442,7 @@ function mcmc_linear_risk!(
             data.in_risk_idx,
             data.s_norm,
             steps.beta,
+            priors
         )
 
         beta_draws[i] = beta
@@ -645,7 +657,7 @@ function find_lag(gamma,beta,n_burn;target=0.05,grid_size=2000,results=false)
 end
 
 function bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
-    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,lag::Int;
+    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,lag::Int,priors::Priors;
     mem_lim = 0,ele_lim = 0,length_lim = 1_000_000,multithread=true)
 
     println("Running batch MCMC to draw i.i.d. posteior samples...")
@@ -694,7 +706,8 @@ function bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
             init_vals,
             n_burn,
             lag,
-            max_arr_len
+            max_arr_len,
+            priors
         )
     else
         results = _bulk_mcmc_linear_risk(
@@ -705,7 +718,8 @@ function bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
             init_vals,
             n_burn,
             lag,
-            max_arr_len
+            max_arr_len,
+            priors
         )
     end
 
@@ -714,7 +728,8 @@ function bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
 end
 
 function _bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
-    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,lag::Int,max_arr_len::Int)
+    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,
+    lag::Int,max_arr_len::Int,priors::Priors)
 
     full_beta = Vector{Float64}(undef,n_mcmc)
     full_gamma = Array{Float64}(undef,n_mcmc,splines.params.num_basis)
@@ -795,7 +810,8 @@ function _bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
             base_haz_splines,
             n_run,
             steps,
-            init_vals
+            init_vals,
+            priors
         )
 
         thin_idx = base_range[1:n_iid]
@@ -828,7 +844,8 @@ function _bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
         base_haz_splines,
         n_run,
         steps,
-        init_vals
+        init_vals,
+        priors
     )
 
     remain_thin_idx = base_range[1:remainder]
@@ -849,7 +866,8 @@ function _bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
 end
 
 function _par_bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splines,
-    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,lag::Int,max_arr_len::Int)
+    n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,
+    lag::Int,max_arr_len::Int,priors::Priors)
     
     thread_offset = Threads.nthreads(:interactive)
     n_base = base_haz_splines.params.num_basis
@@ -961,7 +979,8 @@ function _par_bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splin
             base_haz_splines,
             n_run,
             steps,
-            init_vals
+            init_vals,
+            priors
         )
 
         thin_idx = base_range[1:n_iid]
@@ -994,7 +1013,8 @@ function _par_bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splin
         base_haz_splines,
         n_run,
         steps,
-        init_vals
+        init_vals,
+        priors
     )
 
     remain_thin_idx = base_range[1:remainder]
@@ -1015,8 +1035,9 @@ function _par_bulk_mcmc_linear_risk(data::StepStressData,base_haz_splines::Splin
 end
 
 function bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
-    risk_splines::Splines,s_map::Array{Int,2},n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,
-    lag::Int;mem_lim = 0,ele_lim = 0,length_lim = 1_000_000,multithread=true)
+    risk_splines::Splines,s_map::Array{Int,2},n_mcmc::Int,
+    steps::StepSize,init_vals,n_burn::Int,lag::Int,priors::Priors;
+    mem_lim = 0,ele_lim = 0,length_lim = 1_000_000,multithread=true)
 
     #println("Running batch MCMC to draw i.i.d. posteior samples...")
     #println("The desired number of i.i.d. samples is ",n_mcmc)
@@ -1057,10 +1078,10 @@ function bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
     #end
     if multithread
         results = _par_bulk_mcmc_risk_splines(data,base_haz_splines,risk_splines,s_map,n_mcmc,steps,init_vals,
-    n_burn,lag,max_arr_len)
+    n_burn,lag,max_arr_len,priors)
     else
         results = _bulk_mcmc_risk_splines(data,base_haz_splines,risk_splines,s_map,n_mcmc,steps,init_vals,
-    n_burn,lag,max_arr_len)
+    n_burn,lag,max_arr_len,priors)
     end
 
     return results
@@ -1256,7 +1277,7 @@ end
 =#
 function _bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
     risk_splines::Splines,s_map::Array{Int,2},n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,
-    lag::Int,max_arr_len::Int)
+    lag::Int,max_arr_len::Int,priors::Priors)
 
     n_base = base_haz_splines.params.num_basis
     n_risk = risk_splines.params.num_basis
@@ -1355,7 +1376,8 @@ function _bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
             n_run,
             steps,
             s_map,
-            init_vals
+            init_vals,
+            priors
         )
 
         thin_idx = base_range[1:n_iid]
@@ -1394,7 +1416,8 @@ function _bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
         n_run,
         steps,
         s_map,
-        init_vals
+        init_vals,
+        priors
     )
 
     remain_thin_idx = base_range[1:remainder]
@@ -1416,7 +1439,7 @@ end
 
 function _par_bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Splines,
     risk_splines::Splines,s_map::Array{Int,2},n_mcmc::Int,steps::StepSize,init_vals,n_burn::Int,
-    lag::Int,max_arr_len::Int)
+    lag::Int,max_arr_len::Int,priors::Priors)
 
     thread_offset = Threads.nthreads(:interactive)
     n_base = base_haz_splines.params.num_basis
@@ -1552,7 +1575,8 @@ function _par_bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Spli
             n_run,
             steps,
             s_map,
-            init_vals
+            init_vals,
+            priors
         )
 
         thin_idx = base_range[1:n_iid]
@@ -1591,7 +1615,8 @@ function _par_bulk_mcmc_risk_splines(data::StepStressData,base_haz_splines::Spli
         n_run,
         steps,
         s_map,
-        init_vals
+        init_vals,
+        priors
     )
 
     remain_thin_idx = base_range[1:remainder]
