@@ -720,6 +720,10 @@ function find_k(gamma,I_diff,risk_terms)
     else
         prev_surv = survival_vals[k-1]
     end
+    print_idx = max(1,k-3):min(length(survival_vals),k+3)
+    #println(survival_vals[print_idx])
+    #println(cumsum(I_diff * gamma)[print_idx])
+    #println(risk_terms[print_idx])
 
     return log_u,k,prev_surv,survival_vals[k]
 end
@@ -729,7 +733,18 @@ recursive binary search function to find actual failure time for random sample
 """
 function bisect_recurse(target,t1,t2,S1,S2,spline_params,gamma,tol)
     # evaluate the center point between the lower and upper bounds
+    #ratio = (target - S1) / (S2 - S1)
+    #t_center = t1 + ratio * (t2 - t1)
+    #println("t1  = ",t1)
+    #println("t2 = ",t2)
+    #println("S1 = ",S1)
+    #println("S2 = ",S2)
+    #println("target = ",target)
+    #println("ratio = ",ratio)
+    #println("ratio t = ",t_center)
+    #println("centeral t = ",0.5*(t1 + t2))
     t_center = 0.5 * (t1 + t2)
+    #println(t_center)
     I_center = vec(eval_i_spline(
         spline_params.design.k,
         spline_params.num_basis,
@@ -787,6 +802,15 @@ function sample_t(gamma,splines,risk_terms,t_grid,tol=1e-8)
     I_next = (S2 - S1) / risk_terms[k] + 
     sum(vec(gamma) .* vec(I_prev))
 
+    #println("log u = ",log_u)
+    #println("k = ",k)
+    #println("previous S =",S1)
+    #println("next S = ",S2)
+    #println("prev I = ",sum(vec(gamma) .* vec(I_prev)))
+    #println("next I = ",I_next)
+    #println("target = ",target)
+    #println("prev time = ",t_grid[k])
+    #println("next time = ",t_grid[k+1])
     t_sample = bisect_recurse(
         target,
         t_grid[k],
