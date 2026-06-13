@@ -20,93 +20,76 @@ using StatsPlots
 using StatsBase
 using Profile
 using Printf
-
+using Roots
 ########################
 ## define material model
-s_min = 1000.0
-s_max = 20_000.0
-n_min = 1e3
-n_max = 1e8
+#s_min = 1000.0
+#s_max = 20_000.0
+#n_min = 1e3
+#n_max = 1e8
 
-mat = FatigueHazards.BilinearMaterial(
-    s_max,
-    s_min,
-    n_max,
-    n_min
+s_yield = 189.9
+s_ult = 208.0
+e_yield = 0.008
+e_ult = 0.010
+E = 29000.0
+truth_error = Normal(0.0,0.93)
+
+mat = FatigueHazards.MMPDS(
+    9.31,
+    -2.73,
+    93.4
 )
 
-damage_rule = FatigueHazards.LinearDamage(
-    0.0,
-    1.0,
-    0.0
-)
-
+damage_rule = FatigueHazards.PalmgrenMiner()
+damage_rule = FatigueHazards.MansonHalford()
+damage_rule = FatigueHazards.ModifiedAeran()
 ####################################
 #### generate synthetic data
 test_constraints = FatigueHazards.TestConstraints(
-    1000.0,
-    20000.0
+    95.0,
+    210.0
 )
 #s0 = [1000.0,4000.0,8000.0,14000.0,20000.0]
 #ds = [-2000.0,2000.0,-6000.0,6000.0]
 #n0 = [1e3,1e4,1e5,1e6]
 ## test design
-s0 = [1000.0,6000.0] # starting stress
-ds = [2000.0,6000.0] # stress step
+s0 = [100.0,160.0] # starting stress
+ds = [15.0,50.0] # stress step
 n0 = [1e4,1e6] # number of cycles per stress level
 
-#s0 = exp.(collect(
-#    range(
-#        start = log(1000.0),
-#        stop=log(20000.0),
-#        length = 50
-#    )
-#))
-#ds = [0.0]
-#n0 = [1e10]
+s0 = exp.(collect(
+    range(
+        start = log(1000.0),
+        stop=log(20000.0),
+        length =30
+    )
+))
+ds = [-100.0]
+n0 = [1e5]
 
 n_rep = 3 # number of i.i.d. samples per test design point
 
 # material strength error
-error_dist = Normal(0.0,0.05)
-
+#error_dist = Normal(0.0,0.05)
+error_dist = Normal(0.0,0.093)
 # construct design
 initial_design = FatigueHazards.sweep_design(s0,ds,n0,n_rep)
 
-#=
-new_s0 = [20000.0,10000.0]
-new_ds = [10000.0,-1000.0,-5000.0,-10000.0]
-new_n = [1e3,1e5,1e7]
-
-added_designs = FatigueHazards.sweep_design(new_s0,new_ds,new_n,n_rep)
-
-for d in added_designs
-    push!(initial_design,d)
-end
-
-new_s02 = [20000.0,10000.0]
-new_ds2 = [-2000.0,-5000.0,-8000.0]
-new_n2 = [1e3,1e4,1e4]
-
-added_designs2 = FatigueHazards.sweep_design(new_s02,new_ds2,new_n2,n_rep)
-
-for d in added_designs2
-    push!(initial_design,d)
-end
-=#
 # load existing data
-#optimized_designs = readdlm("../examples/sequential_design-fixed-designs.txt",',')
+optimized_designs = readdlm("../examples/MMPDS-MansonHalford-designs.txt",',')
+#optimized_designs = readdlm("/home/stephenw/Nextcloud/Documents/engr/PhD/fatigue/src/results/test4/sequential_design-fixed-designs.txt",',')
+for i in axes(optimized_designs,1)
+    push!(
+        initial_design,
+        FatigueHazards.StepStressTest(
+            optimized_designs[i,1],
+            optimized_designs[i,2],
+            optimized_designs[i,3]
+        )
+    )
+end
 
-#for i in axes(optimized_designs,1)
-#    push!(
-#        initial_design,
-#        FatigueHazards.StepStressTest(
-#            optimized_designs[i,1],
-#            optimized_designs[i,2],
-#            optimized_designs[i,3]
-#        )
-#    )
-#end
 # generate data
 initial_data = FatigueHazards.simulate_step_stress(
     damage_rule,
@@ -116,162 +99,37 @@ initial_data = FatigueHazards.simulate_step_stress(
     test_constraints
 )
 
-#=
-n_orig = n_rep * length(s0) * length(ds) * length(n0)
-n_added = n_rep * length(new_s0) * length(new_ds) * length(new_n)
-initial_data.raw.stresses[n_orig + 10]
-initial_data.raw.cycles[n_orig + 10]
-initial_design[n_orig + 10]
-
-test1 = FatigueHazards.single_step_stress(
-    damage_rule,
-    mat,
-    initial_design[n_orig + 10],
-    error_dist,
-    test_constraints
-)
-let 
-    global has_failed = false
-    ita = 0
-    global stresses = []
-    global cycles = []
-    global cumulative_damage = Float64[]
-    push!(cumulative_damage,0.0)
-    global error_sample = rand(error_dist)
-
-    s0_use = initial_design[n_orig + 10].s0
-    ds_use = initial_design[n_orig + 10].ds
-    n_use = initial_design[n_orig + 10].n
-
-    while !has_failed
-        global stresses = s0_use .+ collect(0:1:ita) * ds_use
-        println("Iteration $ita")
-        println("Stress = $(stresses[end])")
-        global curr_stress = copy(stresses[end])
-        global stresses .= min.(stresses,test_constraints.s_max)
-        global stresses .= max.(stresses,test_constraints.s_min)
-
-        global cycles = repeat([n_use], ita + 1)
-
-        damage_i = FatigueHazards.eval_damage(
-            damage_rule,
-            mat,
-            stresses,
-            cycles,
-            error_sample
-        )
-        push!(cumulative_damage, damage_i)
-        global has_failed = cumulative_damage[end] >= 1.0
-        ita += 1
-        println(stresses[end] == curr_stress)
-        if curr_stress >= test_constraints.s_max && ds_use >= 0.0
-            println("triggered greater than condition")
-            break
-        elseif curr_stress <= test_constraints.s_min && ds_use <= 0.0
-            println("triggered less than condition")
-            break
-        end
-    end
-
-    global remaining_cycles = FatigueHazards.calc_remainder(
-        damage_rule,
-        mat,
-        stresses[end],
-        error_sample,
-        cumulative_damage[end-1]
-    )
-
-    global cycles[end] = remaining_cycles
-end
-let
-    damage = 0.0
-    for (s,n) in zip(stresses[1:9],cycles[1:9])
-        println("σ = $s,n = $n")
-        sn = FatigueHazards.eval_sn(mat,s)
-        println("SN curve @ σ: N = $sn")
-        base_ratio = n / sn
-        println("Base ratio = $base_ratio")
-        s_diff = s - damage_rule.x0
-        modifier = damage_rule.intercept + s_diff * damage_rule.coeff
-        damage += base_ratio * modifier
-        println("Damage increment = $(base_ratio * modifier)")
-        println("Cumulative damage = $damage")
+for i in eachindex(initial_design)
+    n_remain = initial_data.raw.cycles[i][end]
+    if n_remain > initial_design[i].n
+        println("bing bong")
     end
 end
-test1 = FatigueHazards.single_step_stress(
-    mat,
-    FatigueHazards.StepStressTest(
-        10000.0,
-        0.0,
-        1e3
-    ),
-    error_dist
-)
-
-test2 = FatigueHazards.single_step_stress(
-    damage_rule,
-    mat,
-    FatigueHazards.StepStressTest(
-        10000.0,
-        0.0,
-        1e3
-    ),
-    error_dist,
-    test_constraints
-)
-=#
-#=
-added_design = repeat([design_points[1]],3)
-new_data = FatigueHazards.simulate_step_stress(
-    damage_rule,
-    mat,
-    added_design,
-    error_dist,
-    test_constraints
-)
-total_cycles = vcat(
-    initial_data.raw.cycles,
-    new_data.raw.cycles
-)
-total_stresses = vcat(
-    initial_data.raw.stresses,
-    new_data.raw.stresses
-)
-total_data = FatigueHazards.partition_time(
-    FatigueHazards.StepStressRawData(
-        total_stresses,
-        total_cycles
-    )
-)
-total_data.t_norm[2:(end-1)] .= total_data.t_norm[2:(end-1)] .* total_data.t_max / initial_data.t_max
-total_data.s_norm[2:(end-1),:] .= total_data.s_norm[2:(end-1),:] .* total_data.s_max / initial_data.s_max
-=#
-
-#initial_data.t_norm[2:(end-1)] = log.(initial_data.t_norm[2:(end-1)] * initial_data.t_max) #./ log(initial_data.t_max)
-#initial_data.s_norm[2:(end-1),:] = log.(initial_data.s_norm[2:(end-1),:] * initial_data.s_max) #./ log(initial_data.s_max)
-
-#initial_data.t_norm[2:(end-1)] .= initial_data.t_norm[2:(end-1)] .* initial_data.t_max ./ real_t_max
-#initial_data.s_norm[2:(end-1),:] .= initial_data.s_norm[2:(end-1),:] .* initial_data.s_max ./ real_s_max
 
 ######################################
 ## generate splines
 begin
-    base_haz_spline_order = 3
-    base_haz_n_int = 2
-    risk_spline_order = 3
-    risk_n_int = 2
+    base_haz_spline_order = 4
+    base_haz_n_int = 3
+    risk_spline_order = 4
+    risk_n_int = 3
     base_haz_spl,risk_spl = FatigueHazards.init(initial_data,base_haz_spline_order,base_haz_n_int,risk_spline_order,risk_n_int)
     s_map = FatigueHazards.map_unique(initial_data)
     s_map[2:(end-1),:] .-= 1
     #base_haz_spl = FatigueHazards.init(initial_data,base_haz_spline_order,base_haz_n_int)
 end
 
-general_t_grid = exp.(
-    collect(
-        range(
-            start = log.(100.0 / initial_data.t_max),
-            stop = log.(base_haz_spl.params.knot_grid[end] - sqrt(eps(Float64))),
-            length = 1000
+priors = FatigueHazards.init_priors(Gamma(1.0,0.5),base_haz_spl,risk_spl)
+
+general_t_grid = vcat(
+    1e-4,
+    exp.(
+        collect(
+            range(
+                start = log.(100.0),
+                stop = log.(2.5e9) - sqrt(eps(Float64)),
+                length = 999
+            )
         )
     )
 )
@@ -279,8 +137,8 @@ general_t_grid = exp.(
 general_s_grid = exp.(
     collect(
         range(
-            start = log(s_min / initial_data.s_max),
-            stop = log(s_max / initial_data.s_max),
+            start = log(test_constraints.s_min),
+            stop = log(test_constraints.s_max),
             length = 150
         )
     )
@@ -457,7 +315,8 @@ begin
         risk_spl,
         400,
         70,
-        s_map;
+        s_map,
+        priors;
         target=[0.44,0.44],
         #init_vals = opt_vals,
         init_vals=repeat(
@@ -488,10 +347,11 @@ begin
         20_000,
         steps,
         s_map,
-        init_vals
+        init_vals,
+        priors
     )
-#end
-#begin
+end
+begin
     n_burn = 1000
     lag,acf_vals = FatigueHazards.find_lag(
         samples.gamma,
@@ -520,7 +380,8 @@ begin
         steps,
         init_vals,
         n_burn,
-        lag;
+        lag,
+        priors;
         length_lim=max_size,
         multithread=true
     )
@@ -562,8 +423,8 @@ begin
         ) 
     )
     =#
-    FatigueHazards.update_x!(risk_spl,general_s_grid)
-    FatigueHazards.update_x!(base_haz_spl,general_t_grid)
+    FatigueHazards.update_x!(risk_spl,general_s_grid ./ initial_data.s_max)
+    FatigueHazards.update_x!(base_haz_spl,general_t_grid ./ initial_data.t_max)
     for i in eachindex(general_s_grid)
         
         M_beta = repeat(risk_spl.M[i,:]',length(general_t_grid)-1)
@@ -583,7 +444,7 @@ begin
                 gamma_use,
                 base_haz_spl,
                 risk_terms,
-                general_t_grid,
+                general_t_grid ./ initial_data.t_max,
                 1e-6
             )
             t_samples[j,i] = t
@@ -655,12 +516,12 @@ end
 
 # plot posterior prediction of failure time
 let 
-    log_s = log.(10,general_s_grid .* initial_data.s_max)
+    log_s = log.(10,general_s_grid)
     log_n = log.(10,t_samples .* initial_data.t_max)
 
     truth_failure_time = Vector{Float64}(undef,length(log_s))
     for i in eachindex(log_s)
-        truth_failure_time[i] = FatigueHazards.bilinear_sn(
+        truth_failure_time[i] = FatigueHazards.eval_sn(
             mat,
             exp(
                 log_s[i] * log(10.0)
@@ -674,7 +535,7 @@ let
         log_s,
         sort(log_n,dims=1)',
         label="Estimate",
-        #errorstyle=:plume
+        errorstyle=:plume
     )
     # subtle lines to at observed failure times
     #hline!(
@@ -688,6 +549,8 @@ let
         log.(10,truth_failure_time),
         label="Truth"
     )
+    knot_vals = log.(10,risk_spl.params.knot_grid .* initial_data.s_max)
+    vline!(knot_vals,label="Knots")
     xlabel!("Log-10 Stress")
     ylabel!("Log-10 Failure Time")
     title!("Model Estimate v.s. Truth")
@@ -696,9 +559,9 @@ end
 
 # plot posterior estimate of risk splines
 let 
-    risk_vals = risk_spl.M[2:end,:] * test2[1][15001:16000,:]'#samples.beta[10001:11000,:]'
+    risk_vals = risk_spl.M[2:end,:] * samples.beta[10001:11000,:]'
 
-    s_vals = log.(10,general_s_grid .* initial_data.s_max)
+    s_vals = log.(10,general_s_grid)
     p = plot()
     errorline!(s_vals[2:end],risk_vals,label="Estimate")
     knot_vals = log.(10,risk_spl.params.knot_grid .* initial_data.s_max)
@@ -711,9 +574,9 @@ end
 
 # plot posterior estimate of baseline hazard splines
 let 
-    haz_vals = base_haz_spl.I * test2[2][15001:16000,:]'#samples.gamma[10001:11000,:]'
+    haz_vals = base_haz_spl.I * samples.gamma[10001:11000,:]'
 
-    t_vals = log.(10,general_t_grid .* initial_data.t_max)
+    t_vals = log.(10,general_t_grid)
     p = plot()
     errorline!(t_vals,haz_vals,label="Posterior Estimate")
     knot_vals = log.(10,base_haz_spl.params.knot_grid .* initial_data.t_max)
@@ -754,12 +617,6 @@ test_point = FatigueHazards.optimize_design(
     reduce=false,
 )
 
-temp_design = FatigueHazards.StepStressTest(
-    9000.0,
-    -3000.0,
-    1e3
-)
-
 @time temp_ent = FatigueHazards.eval_entropy(
     temp_design,
     initial_data,
@@ -773,7 +630,7 @@ temp_design = FatigueHazards.StepStressTest(
     multithread=true,
     return_times=true
 )
-let 
+let
     n = length(temp_ent[1])
     r_idx = sample(1:n,n,replace=false)
     p = plot()
@@ -785,15 +642,15 @@ end
 println(current_rss())
 #####################################
 # run sequential design
-case = "sequential_design-fixed-"
+case = "MMPDS-ModifiedAeran-"
 n_t_sample = 1000
 n_posterior_save = 1000
-n_rep_obs = 3
+n_rep_obs = 5
 
-ds_min = -10000.0
-ds_max = 10000.0
+ds_min = -100.0
+ds_max = 100.0
 n_const = 5e3
-n_opt = 15
+n_opt = 25
 
 design_points = FatigueHazards.StepStressTest[]
 #beta_draws = Array{Float64}(undef,1000,size(bulk_samples.beta,2),n_opt)
@@ -820,13 +677,21 @@ for i in 1:n_opt
     full_data.t_norm[2:(end-1)] .= full_data.t_norm[2:(end-1)] .* full_data.t_max ./ initial_data.t_max
     full_data.s_norm[2:(end-1),:] .= full_data.s_norm[2:(end-1),:] .* full_data.s_max ./ initial_data.s_max
 
+    full_data.t_max = initial_data.t_max
+    full_data.s_max = initial_data.s_max
     open("../examples/status.txt","a") do f
         println(f,"updating spline grids...")
     end
-    FatigueHazards.update_x!(base_haz_spl,full_data.t_norm[1:(end-1)])
-    s_unique = sort(unique(full_data.s_norm))
-    FatigueHazards.update_x!(risk_spl,s_unique)
-    
+    #FatigueHazards.update_x!(base_haz_spl,full_data.t_norm[1:(end-1)])
+    #s_unique = sort(unique(full_data.s_norm))
+    #FatigueHazards.update_x!(risk_spl,s_unique)
+    global base_haz_spl,risk_spl = FatigueHazards.init(
+        full_data,
+        base_haz_spline_order,
+        base_haz_n_int,
+        risk_spline_order,
+        risk_n_int
+    )
     s_map = FatigueHazards.map_unique(full_data)
     s_map[2:(end-1),:] .-= 1
 
@@ -838,9 +703,10 @@ for i in 1:n_opt
         full_data,
         base_haz_spl,
         risk_spl,
-        400,
+        300,
         70,
-        s_map;
+        s_map,
+        priors;
         target = [0.44,0.44],
         init_vals=repeat(
             [1.0],
@@ -871,7 +737,8 @@ for i in 1:n_opt
         20_000,
         steps,
         s_map,
-        init_vals
+        init_vals,
+        priors
     )
 
     open("../examples/status.txt","a") do f
@@ -899,7 +766,7 @@ for i in 1:n_opt
     open("../examples/status.txt","a") do f
         println(f,"Drawing bulk i.i.d. samples...")
     end
-    bulk_samples = FatigueHazards.bulk_mcmc_risk_splines(
+    global bulk_samples = FatigueHazards.bulk_mcmc_risk_splines(
         full_data,
         base_haz_spl,
         risk_spl,
@@ -908,7 +775,8 @@ for i in 1:n_opt
         steps,
         init_vals,
         n_burn,
-        lag;
+        lag,
+        priors;
         length_lim=max_size,
         multithread=true
     )
@@ -935,28 +803,30 @@ for i in 1:n_opt
         risk_spl,
         10,
         test_constraints;
-        s_min=1e3,
-        s_max=2e4,
-        ds_min=-1e4,
-        ds_max=1e4,
+        s_min=95.0,
+        s_max=210.0,
+        ds_min=-100.0,
+        ds_max=100.0,
         n_max = 1e7,
         n_const=5000.0,
         n_min=1000,
         n_mcmc=5000,
-        n_init=45,
+        n_init=35,
         n_use=2,
         n_rep=2,
         reduce=false,
-        multithread=true
+        multithread=true,
+        obj=:entropy,
+        n_validate=0
     )
 
     global test_point = opt_res[1]
     gp_inputs = opt_res[2]
     gp_resp = opt_res[3]
-    validation_inp = opt_res[4]
-    validation_resp = opt_res[5]
-    validation_prediction = opt_res[6]
-    validation_uncert = opt_res[7]
+    #validation_inp = opt_res[4]
+    #validation_resp = opt_res[5]
+    #validation_prediction = opt_res[6]
+    #validation_uncert = opt_res[7]
 
     open("../examples/$(case)designs.txt","a") do f
         println(f,"$(test_point.s0),$(test_point.ds),$(test_point.n)")
@@ -972,6 +842,7 @@ for i in 1:n_opt
         println(f,join(string.(gp_resp),','))
     end
 
+    #=
     open("../examples/$(case)val_inp.txt","a") do f
         for j in axes(validation_inp,2)
             println(f,join(string.(validation_inp[:,j]),','))
@@ -989,15 +860,17 @@ for i in 1:n_opt
     open("../examples/$(case)val_uncert.txt","a") do f
         println(f,join(string.(validation_uncert),','))
     end
+    =#
     push!(design_points,test_point)
 
-    FatigueHazards.update_x!(risk_spl,general_s_grid)
-    FatigueHazards.update_x!(base_haz_spl,general_t_grid)
+    FatigueHazards.update_x!(risk_spl,general_s_grid ./ initial_data.s_max)
+    FatigueHazards.update_x!(base_haz_spl,general_t_grid ./ initial_data.t_max)
 
     open("../examples/status.txt","a") do f
         println(f,"Estimating failure time...")
     end
     for j in eachindex(general_s_grid)
+        println(j)
         M_beta = repeat(risk_spl.M[j,:]',length(general_t_grid) - 1)
         for k in 1:n_t_sample
             beta_use = bulk_samples.beta[k,:]
@@ -1008,7 +881,7 @@ for i in 1:n_opt
                 gamma_use,
                 base_haz_spl,
                 risk_terms,
-                general_t_grid,
+                general_t_grid ./ initial_data.t_max,
                 1e-6
             )
             t_samples[k,j] = t
