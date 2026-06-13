@@ -19,6 +19,14 @@ struct ModifiedBasquin <: MaterialModel
     exponent::Float64
 end
 
+struct ModifiedBilinear <: MaterialModel
+    coeff1::Float64
+    coeff2::Float64
+    slope1::Float64
+    slope2::Float64
+    s0::Float64
+end
+
 struct BaumelSeeger <: MaterialModel
     s_yield::Float64
     s_ult::Float64

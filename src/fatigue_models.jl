@@ -110,10 +110,21 @@ function _eval_sn(material::Basquin,s::Float64)
 end
 
 function _eval_sn(material::ModifiedBasquin,s::Float64)
-    stress_ratio = s / material.coeff
-    exp_ratio = stress_ratio^(1/material.exponent)
-    n = exp_ratio
+    #stress_ratio = s / material.coeff
+    #exp_ratio = stress_ratio^(1/material.exponent)
+    #n = exp_ratio
+    log_n = material.coeff + (material.slope) * log(10.0,s)
+    n = 10 ^ log_n
     return n
+end
+
+function _eval_sn(material::ModifiedBilinear,s::Float64)
+    if s <= material.s0
+        log_n = material.coeff1 + material.slope1 * log(10.0,s)
+    else
+        log_n = material.coeff2 + material.slope2 * log(10.0,s)
+    end
+    return 10 ^ log_n
 end
 
 function _eval_sn(material::BaumelSeeger,s::Float64)
