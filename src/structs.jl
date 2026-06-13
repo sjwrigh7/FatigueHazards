@@ -8,6 +8,32 @@ struct BilinearMaterial <: MaterialModel
     slope::Float64
 end
 
+struct Basquin <: MaterialModel
+    strength::Float64
+    ductility::Float64
+    exponent::Float64
+end
+
+struct ModifiedBasquin <: MaterialModel
+    coeff::Float64
+    exponent::Float64
+end
+
+struct BaumelSeeger <: MaterialModel
+    s_yield::Float64
+    s_ult::Float64
+    e_yield::Float64
+    e_ult::Float64
+    elasticity::Float64
+    psi::Float64
+end
+
+struct MMPDS <: MaterialModel
+    n_intercept::Float64
+    slope::Float64
+    s_offset::Float64
+end
+
 abstract type DamageRule end
 
 struct LinearDamage <: DamageRule
@@ -22,6 +48,11 @@ struct PolynomialDamage <: DamageRule
     intercept::Float64
     x0::Float64
 end
+
+struct PalmgrenMiner <: DamageRule end
+struct MansonHalford <: DamageRule end
+struct KwofieRhabar <: DamageRule end
+struct ModifiedAeran <: DamageRule end
 
 # data synthesis structs
 struct StepStressTest
@@ -41,7 +72,7 @@ struct StepStressRawData
     cycles::Vector{Vector{Float64}}
 end
 
-struct StepStressData
+mutable struct StepStressData
     raw::StepStressRawData
     s_max::Float64
     t_max::Float64
@@ -111,4 +142,9 @@ end
 mutable struct TestConstraints
     s_min::Float64
     s_max::Float64
+end
+
+struct Priors
+    beta::Union{<:UnivariateDistribution,Vector{<:UnivariateDistribution}}
+    gamma::Vector{<:UnivariateDistribution}
 end
