@@ -7,7 +7,7 @@ This method is for a survival model using an M-spline risk function
 """
 function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Array{Float64,2},
     M_beta::Array{Float64,2},beta::Vector{Float64},fail_idx::Vector{Int},s_map::Array{Int,2},
-    step::Float64,j::Int)
+    step::Float64,j::Int,priors::Priors)
     
     current_gamma = gamma
     proposed_gamma = copy(current_gamma)
@@ -38,16 +38,12 @@ function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Arr
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
-    
-    acceptance_ratio = min(
-        exp(
-            log_lik_ratio + log_jump_ratio
-        ),
-        1.0
-    )
+    log_prior_ratio = logpdf(priors.gamma[idx],proposed_gamma[idx]) -
+        logpdf(priors.gamma[idx],current_gamma[idx])
+    acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
 
-    u = rand(Uniform(0.0,1.0))
-    accept = u <= acceptance_ratio
+    log_u = log(rand(Uniform(0.0,1.0)))
+    accept = log_u <= acceptance_ratio
 
     if accept
         return_gamma = proposed_gamma[j]
@@ -67,7 +63,7 @@ This method is for a survival model using a linear risk function
 """
 function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Array{Float64,2},
     stresses::Array{Float64,2},beta::Float64,fail_idx::Vector{Int},
-    step::Float64,j::Int)
+    step::Float64,j::Int,priors::Priors)
     
     current_gamma = gamma
     proposed_gamma = copy(current_gamma)
@@ -98,16 +94,12 @@ function metropolis_gamma(gamma::Vector{Float64},M::Array{Float64,2},I_diff::Arr
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
-    
-    acceptance_ratio = min(
-        exp(
-            log_lik_ratio + log_jump_ratio
-        ),
-        1.0
-    )
+    log_prior_ratio = logpdf(priors.gamma[idx],proposed_gamma[idx]) -
+        logpdf(priors.gamma[idx],current_gamma[idx])
+    acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
 
-    u = rand(Uniform(0.0,1.0))
-    accept = u <= acceptance_ratio
+    log_u = log(rand(Uniform(0.0,1.0)))
+    accept = log_u <= acceptance_ratio
 
     if accept
         return_gamma = proposed_gamma[j]
@@ -125,7 +117,9 @@ stress domain basis coefficient.
 This method is for a survival model using an M-spline risk function.
 """
 function metropolis_beta(beta::Vector{Float64},M::Array{Float64,2},I_diff::Array{Float64,2},
-    M_beta::Array{Float64,2},fail_idx::Vector{Int},s_map::Array{Int,2},gamma::Vector{Float64},step::Float64,j::Int)
+    M_beta::Array{Float64,2},fail_idx::Vector{Int},
+    s_map::Array{Int,2},gamma::Vector{Float64},
+    step::Float64,j::Int,priors::Priors)
 
     current_beta = beta
     proposed_beta = copy(current_beta)
@@ -158,8 +152,8 @@ function metropolis_beta(beta::Vector{Float64},M::Array{Float64,2},I_diff::Array
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
-    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta[j]) -
-        logpdf(Gamma(1.0,2.0),current_beta[j])
+    log_prior_ratio = logpdf(priors.beta[j],proposed_beta[j]) -
+        logpdf(priors.beta[j],current_beta[j])
     acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
 
     log_u = log(rand(Uniform(0.0,1.0)))
@@ -185,7 +179,8 @@ risk function coefficient.
 This method is for a survival model using a linear risk function.
 """
 function metropolis_beta(beta::Float64,M::Array{Float64,2},I_diff::Array{Float64,2},
-    stresses::Array{Float64,2},fail_idx::Vector{Int},gamma::Vector{Float64},step::Float64)
+    stresses::Array{Float64,2},fail_idx::Vector{Int},gamma::Vector{Float64},
+    step::Float64,priors::Priors)
 
     current_beta = beta
     current_transformed = log(beta)
@@ -214,8 +209,8 @@ function metropolis_beta(beta::Float64,M::Array{Float64,2},I_diff::Array{Float64
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
-    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta) -
-        logpdf(Gamma(1.0,2.0),current_beta)
+    log_prior_ratio = logpdf(priors.beta,proposed_beta) -
+        logpdf(priors.beta,current_beta)
     acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
 
     log_u = log(rand(Uniform(0.0,1.0)))
@@ -250,7 +245,8 @@ function metropolis_gamma!(
     main_M_partial::Array{Float64,2},off_M_partial::Array{Float64,2},
     base_haz_splines::Splines,
     inst_risk::Array{Float64,2},risk_sums::Vector{Float64},
-    fail_idx::Vector{Int},step::Float64,idx::Int)
+    fail_idx::Vector{Int},step::Float64,idx::Int,
+    priors::Priors)
     
     #current_gamma = gamma
     #proposed_gamma = copy(current_gamma)
@@ -307,16 +303,12 @@ function metropolis_gamma!(
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
-    
-    acceptance_ratio = min(
-        exp(
-            log_lik_ratio + log_jump_ratio
-        ),
-        1.0
-    )
+    log_prior_ratio = logpdf(priors.gamma[idx],proposed_gamma[idx]) -
+        logpdf(priors.gamma[idx],current_gamma[idx])
+    acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
 
-    u = rand(Uniform(0.0,1.0))
-    accept = u <= acceptance_ratio
+    log_u = log(rand(Uniform(0.0,1.0)))
+    accept = log_u <= acceptance_ratio
 
     if accept
         #return_gamma = proposed_gamma[idx]
@@ -354,7 +346,7 @@ function metropolis_beta!(
     risk_splines::Splines,
     time_I_diff::Vector{Float64},time_M::Vector{Float64},
     fail_idx::Vector{Int},in_risk_idx::Vector{Vector{Int}},
-    s_map::Array{Int,2},step::Float64,idx::Int)
+    s_map::Array{Int,2},step::Float64,idx::Int,priors::Priors)
 
     #current_beta = beta
     #proposed_beta = copy(current_beta)
@@ -429,8 +421,8 @@ function metropolis_beta!(
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
-    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta[idx]) -
-        logpdf(Normal(1.0,2.0),current_beta[idx])
+    log_prior_ratio = logpdf(priors.beta[idx],proposed_beta[idx]) -
+        logpdf(priors.beta[idx],current_beta[idx])
     acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
 
     log_u = log(rand(Uniform(0.0,1.0)))
@@ -466,7 +458,7 @@ function metropolis_beta!(
     off_inst_risk::Array{Float64,2},off_risk_sums::Vector{Float64},
     time_I_diff::Vector{Float64},time_M::Vector{Float64},
     fail_idx::Vector{Int},in_risk_idx::Vector{Vector{Int}},
-    stresses::Array{Float64,2},step::Float64)
+    stresses::Array{Float64,2},step::Float64,priors::Priors)
 
     current_transformed = log(current_beta)
     proposed_transformed = rand(Normal(current_transformed,step))
@@ -521,8 +513,8 @@ function metropolis_beta!(
     
     log_lik_ratio = proposed_lik - current_lik
     log_jump_ratio = log_jump_proposed - log_jump_current
-    log_prior_ratio = logpdf(Gamma(1.0,2.0),proposed_beta) -
-        logpdf(Normal(1.0,2.0),current_beta)
+    log_prior_ratio = logpdf(priors.beta,proposed_beta) -
+        logpdf(priors.beta,current_beta)
     acceptance_ratio = log_lik_ratio + log_jump_ratio + log_prior_ratio
 
     log_u = log(rand(Uniform(0.0,1.0)))
