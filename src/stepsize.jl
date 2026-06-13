@@ -262,7 +262,7 @@ The step size for the next batch is then calculated as the average of all previo
 """
 function auto_stepsize(data::StepStressData,base_haz_splines::Splines,nbatch::Int,batchsize::Int,
     init_vals::Vector{Float64},init::Float64,target::Vector{Float64},
-    scale::Float64,shape::Float64,offset::Float64)
+    scale::Float64,shape::Float64,offset::Float64,priors::Priors)
 
     stepsize = StepSize(
         init,
@@ -338,7 +338,8 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,nbatch::In
             base_haz_splines,
             batchsize,
             stepsize,
-            iter_init
+            iter_init,
+            priors
         )
         
         iter_init .= vcat(
@@ -412,7 +413,7 @@ The step size for the next batch is then calculated as the average of all previo
 """
 function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splines::Splines,nbatch::Int,
     batchsize::Int,init_vals::Vector{Float64},init,target::Vector{Float64},
-    scale::Float64,shape::Float64,offset::Float64,s_map::Array{Int,2})
+    scale::Float64,shape::Float64,offset::Float64,s_map::Array{Int,2},priors)
 
     n_base = base_haz_splines.params.num_basis
     n_risk = risk_splines.params.num_basis
@@ -505,7 +506,8 @@ function auto_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
             batchsize,
             stepsize,
             s_map,
-            iter_init
+            iter_init,
+            priors
         )
 
         iter_init .= vcat(
@@ -868,8 +870,8 @@ Keyword arguments
 Returns
 * `stepsize::StepSize` Struct containing the calculated stepsizes that will result in the target acceptance rate.
 """
-function find_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsize::Int;
-            init_vals::Union{Vector{Float64},Float64}=0.5,
+function find_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsize::Int,
+            priors::Priors;init_vals::Union{Vector{Float64},Float64}=0.5,
             make_plots::Bool=true,show_plots::Bool=true,save_plots::Bool=true,
             init::Float64=1e-3,target::Vector{Float64}=[0.3,0.3],
             scale::Float64 = 2.0,shape::Float64=10.0,offset::Float64=1.5,mdl_apnd::String="")
@@ -888,7 +890,8 @@ function find_stepsize(data::StepStressData,splines::Splines,nbatch::Int,batchsi
         target,
         scale,
         shape,
-        offset
+        offset,
+        priors
     )
 
     make_plots ? plot_stepsize_opt(stepsize_hist,acceptance_hist,splines,show_plots,save_plots,mdl_apnd) : nothing
@@ -941,7 +944,7 @@ Returns
 * `stepsize::StepSize` Struct containing the calculated stepsizes that will result in the target acceptance rate.
 """
 function find_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splines::Splines,nbatch::Int,
-            batchsize::Int,s_map::Array{Int,2};init_vals::Union{Vector{Float64},Float64}=0.5,
+            batchsize::Int,s_map::Array{Int,2},priors::Priors;init_vals::Union{Vector{Float64},Float64}=0.5,
             make_plots::Bool=true,show_plots::Bool=true,save_plots::Bool=true,
             init=1e-3,target::Vector{Float64}=[0.3,0.3],
             scale::Float64 = 2.0,shape::Float64=10.0,offset::Float64=1.5,mdl_apnd::String="")
@@ -962,7 +965,8 @@ function find_stepsize(data::StepStressData,base_haz_splines::Splines,risk_splin
         scale,
         shape,
         offset,
-        s_map
+        s_map,
+        priors
     )
     #println(size(stepsize.beta))
     #println(size(stepsize.gamma))
