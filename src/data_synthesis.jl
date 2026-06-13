@@ -62,6 +62,8 @@ function single_step_stress(
     push!(cumulative_damage,0.0)
     # sample material strength variance on the specimen level
     error_sample = rand(error_model)
+    println(error_sample)
+    cycles_remaining = 0.0
 
     while !has_failed
         stresses = test.s0 .+ collect(0:1:ita) * test.ds
@@ -72,7 +74,7 @@ function single_step_stress(
 
         cycles = repeat([test.n],ita + 1)
         
-        damage_i = eval_damage(
+        damage_i,cycles_remaining = eval_damage(
             damage_rule,
             material,
             stresses,
@@ -94,6 +96,7 @@ function single_step_stress(
         end
     end
 
+    #=
     remaining_cycles = calc_remainder(
         damage_rule,
         material,
@@ -101,8 +104,9 @@ function single_step_stress(
         error_sample,
         cumulative_damage[end-1]
     )
+    =#
 
-    cycles[end] = remaining_cycles
+    cycles[end] = cycles_remaining
     
     return stresses,cycles
 
@@ -217,12 +221,14 @@ function partition_time(data::StepStressRawData)
 
     for j in axes(delta_i,2)
         for i in 2:(size(delta_i,1) - 1)
-            if data.cycles[j][1] > time_set[i]
+            if (data.cycles[j][1] >= time_set[i]) || 
+                isapprox(data.cycles[j][1],time_set[i])
                 cycle_idx = 1
-            elseif sum(data.cycles[j]) < time_set[i]
+            elseif (sum(data.cycles[j]) <= time_set[i]) ||
+                isapprox(sum(data.cycles[j]),time_set[i])
                 cycle_idx = length(data.cycles[j])
             else
-                cycle_idx = findlast(x -> x <= time_set[i],cumsum(data.cycles[j]))
+                cycle_idx = findlast(x -> x < time_set[i],cumsum(data.cycles[j])) + 1
             end
             stresses[i,j] = data.stresses[j][cycle_idx]
 
