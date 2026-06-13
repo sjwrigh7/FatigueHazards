@@ -599,6 +599,7 @@ function _par_eval_entropy(design::StepStressTest,data::StepStressData,posterior
         risk_terms = exp.(risk_splines.M[2:end,:] * beta_outer[i,:])
         #risk_terms = exp.(stress_grid[2:end] .* beta_outer[i])
         #println(r_gamma[i,:])
+        #println("i = ",outer_idx[i])
         t,k = sample_t(
             gamma_outer[i,:],
             base_haz_splines,
