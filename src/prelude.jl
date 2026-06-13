@@ -43,17 +43,37 @@ function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spl
         )
     )[2:(end-1)]
 
-    base_haz_lower_vals = data.t_norm[base_haz_idx_points]
-    base_haz_upper_vals = data.t_norm[base_haz_idx_points .+ 1]
+    #base_haz_lower_vals = data.t_norm[base_haz_idx_points]
+    #base_haz_upper_vals = data.t_norm[base_haz_idx_points .+ 1]
 
-    base_haz_interior_knots = 0.5 .* (base_haz_lower_vals .+ base_haz_upper_vals)
+    #base_haz_interior_knots = 0.5 .* (base_haz_lower_vals .+ base_haz_upper_vals)
+
+    #time_idx_offset = round(Int,length(data.t_norm)/5)
+    #min_idx = 1 + time_idx_offset
+    #max_idx = length(data.t_norm) - time_idx_offset
+    #time_log_min = log(data.t_norm[min_idx])
+    #time_log_max = log(data.t_norm[max_idx])
+
+    time_max_val = 2.5e9 / data.t_max
+
+    base_haz_knot_vals = exp.(
+        collect(
+            range(
+                start = log(data.t_norm[2]) - 3,
+                stop = log(time_max_val),
+                length = base_haz_n_int + 2
+            )
+        )
+    )
+
+    base_haz_interior_knots = base_haz_knot_vals[2:(end-1)]
 
     base_haz_splines = generate_splines(
         base_haz_spline_order,
         base_haz_interior_knots,
         data.t_norm[1:(end-1)],
         #data.t_norm[(end-1)] + 1.0
-        2.5e9 / data.t_max
+        time_max_val
     )
 
     #s_unique = sort(unique(data.s_norm[2:(end-1),:]))
@@ -71,18 +91,36 @@ function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spl
         )
     )[2:(end-1)]
 
-    risk_lower_vals = s_unique[risk_idx_points]
-    risk_upper_vals = s_unique[risk_idx_points .+ 1]
+    #risk_lower_vals = s_unique[risk_idx_points]
+    #risk_upper_vals = s_unique[risk_idx_points .+ 1]
 
-    risk_interior_knots = 0.5 .* (risk_lower_vals .+ risk_upper_vals)
+    #risk_interior_knots = 0.5 .* (risk_lower_vals .+ risk_upper_vals)
 
+    #stress_idx_offset = round(Int,length(s_unique)/5)
+    #min_idx = 1 + stress_idx_offset
+    #max_idx = length(s_unique) - stress_idx_offset
+    #stress_log_min = log(s_unique[min_idx])
+    #stress_log_max = log(s_unique[max_idx])
+
+    risk_max_val = 220.0 / data.s_max
+
+    risk_knot_vals = exp.(
+        collect(
+            range(
+                start = log(s_unique[2])-3.0,
+                stop = log(risk_max_val),
+                length = risk_n_int + 2
+            )
+        )
+    )
+    risk_interior_knots = risk_knot_vals[2:(end-1)]
 
     risk_splines = generate_splines(
         risk_spline_order,
         risk_interior_knots,
         s_unique,
         #s_unique[end] + 1.0
-        20000.0 / data.s_max
+        risk_max_val
     )
     return base_haz_splines,risk_splines
 end
@@ -199,4 +237,37 @@ function opt_lik(data::StepStressData,base_haz_splines::Splines,risk_splines::Sp
     println("γ = $(opt_vals[(n_risk+1):end])")
     
     return opt_vals
+end
+
+function init_priors(dist::UnivariateDistribution,base_haz_splines::Splines)
+    priors = Priors(
+        dist,
+        repeat([dist],base_haz_splines.params.num_basis)
+    )
+    return priors
+end
+
+function init_priors(dist::UnivariateDistribution,
+    base_haz_splines::Splines,
+    risk_splines::Splines
+)
+    priors = Priors(
+        repeat([dist],risk_splines.params.num_basis),
+        repeat([dist],base_haz_splines.params.num_basis)
+    )
+    return priors
+end
+
+function init_priors(
+    beta_dist::UnivariateDistribution,
+    gamma_dist::UnivariateDistribution,
+    base_haz_splines::Splines,
+    risk_splines::Splines
+)
+    priors = Priors(
+        repeat([beta_dist],risk_splines,params.num_basis),
+        repeat([gamma_dist],base_haz_splines.params.num_basis)
+    )
+
+    return priors
 end
