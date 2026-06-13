@@ -113,7 +113,7 @@ function _eval_sn(material::ModifiedBasquin,s::Float64)
     #stress_ratio = s / material.coeff
     #exp_ratio = stress_ratio^(1/material.exponent)
     #n = exp_ratio
-    log_n = material.coeff + (material.slope) * log(10.0,s)
+    log_n = material.coeff + (material.exponent) * log(10.0,s)
     n = 10 ^ log_n
     return n
 end
