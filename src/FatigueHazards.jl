@@ -12,6 +12,7 @@ using StatsBase
 using Plots
 using LaTeXStrings
 import ElasticPDMats
+using Roots
 # Write your package code here.
 
 include("structs.jl")
