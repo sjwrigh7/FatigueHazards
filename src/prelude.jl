@@ -104,11 +104,11 @@ function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spl
 
     risk_max_val = 220.0 / data.s_max
 
-    risk_knot_vals = exp.(
+    risk_knot_vals = (
         collect(
             range(
-                start = log(s_unique[2])-3.0,
-                stop = log(risk_max_val),
+                start = s_unique[2],
+                stop = risk_max_val,
                 length = risk_n_int + 2
             )
         )
