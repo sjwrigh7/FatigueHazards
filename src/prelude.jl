@@ -43,10 +43,10 @@ function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spl
         )
     )[2:(end-1)]
 
-    #base_haz_lower_vals = data.t_norm[base_haz_idx_points]
-    #base_haz_upper_vals = data.t_norm[base_haz_idx_points .+ 1]
+    base_haz_lower_vals = data.t_norm[base_haz_idx_points]
+    base_haz_upper_vals = data.t_norm[base_haz_idx_points .+ 1]
 
-    #base_haz_interior_knots = 0.5 .* (base_haz_lower_vals .+ base_haz_upper_vals)
+    base_haz_interior_knots = 0.5 .* (base_haz_lower_vals .+ base_haz_upper_vals)
 
     #time_idx_offset = round(Int,length(data.t_norm)/5)
     #min_idx = 1 + time_idx_offset
@@ -76,8 +76,8 @@ function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spl
         time_max_val
     )
 
-    #s_unique = sort(unique(data.s_norm[2:(end-1),:]))
-    s_unique = sort(unique(data.s_norm))
+    s_unique = sort(unique(data.s_norm[2:(end-1),:]))
+    #s_unique = sort(unique(data.s_norm))
 
     risk_idx_points = Int.(
         floor.(
@@ -91,10 +91,10 @@ function init(data::StepStressData,base_haz_spline_order,base_haz_n_int,risk_spl
         )
     )[2:(end-1)]
 
-    #risk_lower_vals = s_unique[risk_idx_points]
-    #risk_upper_vals = s_unique[risk_idx_points .+ 1]
+    risk_lower_vals = s_unique[risk_idx_points]
+    risk_upper_vals = s_unique[risk_idx_points .+ 1]
 
-    #risk_interior_knots = 0.5 .* (risk_lower_vals .+ risk_upper_vals)
+    risk_interior_knots = 0.5 .* (risk_lower_vals .+ risk_upper_vals)
 
     #stress_idx_offset = round(Int,length(s_unique)/5)
     #min_idx = 1 + stress_idx_offset
